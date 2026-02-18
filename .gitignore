@@ -37,4 +37,5 @@
 *.elf
 *.o
 *.d
-!*.md
+!README.md
+!capture_gantt.py
