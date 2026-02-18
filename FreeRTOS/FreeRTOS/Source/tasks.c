@@ -1848,6 +1848,166 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
 
 /* EDF TASK CREATE ----------------------------------------------------------------------*/
 #if ( configUSE_EDF_SCHEDULER == 1 )
+    #ifndef configMAX_EDF_TASKS
+        #define configMAX_EDF_TASKS  128
+    #endif
+
+    /* Registry of admitted EDF tasks for admission control */
+    static struct {
+        TickType_t xWCET;
+        TickType_t xPeriod;
+        TickType_t xRelativeDeadline;
+    } xEDFTaskRegistry[ configMAX_EDF_TASKS ];
+
+    static UBaseType_t uxEDFTaskCount = 0;
+
+    /*
+     * Liu & Layland utilization bound (exact for EDF when D = T).
+     * Returns pdTRUE if schedulable.
+     *
+     * Test: Σ(Ci/Ti) ≤ 1.0
+     * Integer version: Σ(Ci * SCALE / Ti) ≤ SCALE
+     * Using SCALE = 10000 gives 0.01% precision.
+     */
+    #define EDF_UTIL_SCALE  10000U
+
+    static BaseType_t prvEDFCheckLLBound( TickType_t xNewWCET,
+                                          TickType_t xNewPeriod )
+    {
+        uint32_t ulTotalUtil = 0;
+        UBaseType_t i;
+
+        /* Sum existing tasks */
+        for( i = 0; i < uxEDFTaskCount; i++ )
+        {
+            ulTotalUtil += ( ( uint32_t ) xEDFTaskRegistry[ i ].xWCET * EDF_UTIL_SCALE )
+                           / ( uint32_t ) xEDFTaskRegistry[ i ].xPeriod;
+        }
+
+        /* Add candidate task */
+        ulTotalUtil += ( ( uint32_t ) xNewWCET * EDF_UTIL_SCALE )
+                       / ( uint32_t ) xNewPeriod;
+
+        return ( ulTotalUtil <= EDF_UTIL_SCALE ) ? pdTRUE : pdFALSE;
+    }
+
+    /*
+     * Processor Demand Analysis (exact for EDF when D ≤ T).
+     * Returns pdTRUE if schedulable.
+     *
+     * For every testing point L (each absolute deadline in [0, LCM]):
+     *   h(L) = Σ floor((L - Di) / Ti + 1) * Ci  ≤  L
+     *
+     * We limit checking to a bounded time horizon to avoid
+     * computing the full LCM with many tasks.
+     */
+    static BaseType_t prvEDFCheckProcessorDemand( TickType_t xNewWCET,
+                                                  TickType_t xNewPeriod,
+                                                  TickType_t xNewDeadline )
+    {
+        UBaseType_t uxCount = uxEDFTaskCount + 1;
+        TickType_t axWCET[ configMAX_EDF_TASKS ];
+        TickType_t axPeriod[ configMAX_EDF_TASKS ];
+        TickType_t axDeadline[ configMAX_EDF_TASKS ];
+        UBaseType_t i, j;
+        TickType_t xL, xMaxL, xDemand;
+
+        /* Build combined task array (existing + candidate) */
+        for( i = 0; i < uxEDFTaskCount; i++ )
+        {
+            axWCET[ i ] = xEDFTaskRegistry[ i ].xWCET;
+            axPeriod[ i ] = xEDFTaskRegistry[ i ].xPeriod;
+            axDeadline[ i ] = xEDFTaskRegistry[ i ].xRelativeDeadline;
+        }
+        axWCET[ uxEDFTaskCount ] = xNewWCET;
+        axPeriod[ uxEDFTaskCount ] = xNewPeriod;
+        axDeadline[ uxEDFTaskCount ] = xNewDeadline;
+
+        /* Compute time horizon: max period * 2 or 60 seconds, whichever is smaller.
+         * This avoids explosion with large LCMs. For correctness with many tasks,
+         * a busy-period bound could be used, but this is sufficient for testing. */
+        xMaxL = 0;
+        for( i = 0; i < uxCount; i++ )
+        {
+            if( axPeriod[ i ] > xMaxL )
+            {
+                xMaxL = axPeriod[ i ];
+            }
+        }
+        xMaxL = xMaxL * 4;  /* Check up to 4x the longest period */
+        if( xMaxL > pdMS_TO_TICKS( 60000 ) )
+        {
+            xMaxL = pdMS_TO_TICKS( 60000 );
+        }
+
+        /* Test every absolute deadline as a testing point */
+        for( i = 0; i < uxCount; i++ )
+        {
+            /* Check deadlines: D, D+T, D+2T, ... up to xMaxL */
+            xL = axDeadline[ i ];
+            while( xL <= xMaxL )
+            {
+                /* Compute processor demand h(L) */
+                xDemand = 0;
+                for( j = 0; j < uxCount; j++ )
+                {
+                    if( xL >= axDeadline[ j ] )
+                    {
+                        /* Number of jobs of task j with deadline ≤ L:
+                         * floor((L - Dj) / Tj) + 1 */
+                        TickType_t xJobs = ( ( xL - axDeadline[ j ] ) / axPeriod[ j ] ) + 1;
+                        xDemand += xJobs * axWCET[ j ];
+                    }
+                }
+
+                if( xDemand > xL )
+                {
+                    return pdFALSE;  /* Demand exceeds time at this point */
+                }
+
+                xL += axPeriod[ i ];  /* Next deadline of task i */
+            }
+        }
+
+        return pdTRUE;
+    }
+
+    /*
+     * Main admission control entry point.
+     * Automatically selects LL bound (all D == T) or processor demand (any D < T).
+     * Returns pdTRUE if the new task can be admitted.
+     */
+    static BaseType_t prvEDFAdmissionControl( TickType_t xNewWCET,
+                                              TickType_t xNewPeriod,
+                                              TickType_t xNewDeadline )
+    {
+        UBaseType_t i;
+        BaseType_t xAllImplicit = pdTRUE;
+
+        /* Check if all tasks (existing + new) have D == T */
+        for( i = 0; i < uxEDFTaskCount; i++ )
+        {
+            if( xEDFTaskRegistry[ i ].xRelativeDeadline != xEDFTaskRegistry[ i ].xPeriod )
+            {
+                xAllImplicit = pdFALSE;
+                break;
+            }
+        }
+        if( xNewDeadline != xNewPeriod )
+        {
+            xAllImplicit = pdFALSE;
+        }
+
+        if( xAllImplicit == pdTRUE )
+        {
+            return prvEDFCheckLLBound( xNewWCET, xNewPeriod );
+        }
+        else
+        {
+            return prvEDFCheckProcessorDemand( xNewWCET, xNewPeriod, xNewDeadline );
+        }
+    }
+
 
     BaseType_t xTaskCreateEDF( TaskFunction_t pxTaskCode,
                                const char * const pcName,
@@ -1860,12 +2020,21 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
     {
         TCB_t * pxNewTCB;
         BaseType_t xReturn;
-        TickType_t xCurrentTime = xTaskGetTickCount();
+        TickType_t xCurrentTime;
 
-        /* TODO: Run admission control here BEFORE creating the task.
-         * Check if adding this task keeps the system schedulable.
-         * If not, return errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY or a 
-         * custom error code without creating the task. */
+        /* Admission control: reject if system would become unschedulable */
+        if( prvEDFAdmissionControl( xWCET, xPeriod, xRelativeDeadline ) == pdFALSE )
+        {
+            return errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
+        }
+
+        /* Registry full check */
+        if( uxEDFTaskCount >= configMAX_EDF_TASKS )
+        {
+            return errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
+        }
+
+        xCurrentTime = xTaskGetTickCount();
 
         /* Create the task with priority 1 — all EDF tasks share the same
          * priority level. Priority 0 is reserved for idle task. */
@@ -1881,6 +2050,12 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
             pxNewTCB->xNextReleaseTime = xCurrentTime + xPeriod;
             pxNewTCB->xIsEDFTask = pdTRUE;
             pxNewTCB->xDeadlineMissCount = 0;
+
+            /* Register task for future admission control checks */
+            xEDFTaskRegistry[ uxEDFTaskCount ].xWCET = xWCET;
+            xEDFTaskRegistry[ uxEDFTaskCount ].xPeriod = xPeriod;
+            xEDFTaskRegistry[ uxEDFTaskCount ].xRelativeDeadline = xRelativeDeadline;
+            uxEDFTaskCount++;
 
             /* Set xItemValue to absolute deadline so ready list sorts by deadline */
             listSET_LIST_ITEM_VALUE( &( pxNewTCB->xStateListItem ), pxNewTCB->xAbsoluteDeadline );

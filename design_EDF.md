@@ -85,6 +85,61 @@
 4.Manage periodic releases
     Each EDF task is periodic, it runs, finishes its job, then sleeps until its next period
     when a task's period expires, update its absolute deadline to the next one (release_time + D) and put it back in the ready queue
+    ## Periodic Release Management
+
+    EDF tasks are periodic: each job runs, completes, sleeps until the next period,
+    then repeats. Managing the transition between jobs is critical — the task's
+    absolute deadline must be updated to reflect the new job before it re-enters the
+    ready list.
+
+    ### Where it happens
+
+    FreeRTOS wakes delayed tasks inside `xTaskIncrementTick()`. Each tick, it checks
+    the delayed list for tasks whose wake time has arrived. When a task is removed
+    from the delayed list, it is placed back into the ready list via
+    `prvAddTaskToReadyList()`.
+
+    We insert EDF logic **between** removing the task from the delayed list and
+    adding it to the ready list:
+
+    1. Compute the new absolute deadline: `xNextReleaseTime + xRelativeDeadline`
+    2. Advance the next release time: `xNextReleaseTime += xPeriod`
+    3. Write the new deadline into `xStateListItem.xItemValue`
+
+    The task then enters the ready list sorted by its updated deadline, not the old
+    one from the previous job. This is essential — without this update, a task that
+    finished early would re-enter the ready list with a stale (past) deadline and
+    incorrectly receive highest priority.
+
+    ### Deadline-aware preemption
+
+    Stock FreeRTOS triggers a context switch when an unblocked task has higher
+    `uxPriority` than the currently running task. Since all EDF tasks share priority
+    1, this check would never trigger a switch between EDF tasks.
+
+    We added a deadline comparison: if both the waking task and the current task are
+    EDF tasks, compare `xAbsoluteDeadline`. If the waking task's deadline is earlier,
+    a context switch is requested. This is what enables preemption — when Red's period
+    expires and it wakes up with a deadline earlier than Green's, the scheduler
+    immediately switches to Red even though Green hasn't finished its job.
+
+    ### Task execution model
+
+    Each EDF task follows this loop:
+    1. Wake up (moved to ready list with updated deadline)
+    2. Get scheduled (earliest deadline wins)
+    3. Execute for C ticks (busy-wait simulating computation)
+    4. Call `vTaskDelayUntil()` to sleep until the next period
+    5. Repeat from step 1
+
+    The GPIO trace hooks (`traceTASK_SWITCHED_IN` / `traceTASK_SWITCHED_OUT`) toggle
+    a per-task GPIO pin on every context switch. This makes preemption visible on a
+    logic analyzer: when Green is preempted by Red, Green's GPIO goes
+
+
+
+
+
 
 5.Admission control (mandatory part of assignment)
     before accepting a new task, check whether the task set is schedulable. Two methods:

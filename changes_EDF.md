@@ -50,3 +50,30 @@ Added EDF branch: when `configUSE_EDF_SCHEDULER == 1` and `uxTopPriority > 0`
 `listGET_HEAD_ENTRY()` instead of round-robin via `listGET_OWNER_OF_NEXT_ENTRY()`.
 Since EDF tasks are inserted sorted by absolute deadline, the head is always the
 task with the earliest deadline.
+
+4.__________________
+### `xTaskIncrementTick()` — MODIFIED in `tasks.c`
+
+**Deadline update on wake-up (before `prvAddTaskToReadyList`):**
+When a task is moved from the delayed list back to the ready list, if it is an
+EDF task, its absolute deadline and next release time are updated before
+re-insertion:
+- `xAbsoluteDeadline = xNextReleaseTime + xRelativeDeadline`
+- `xNextReleaseTime += xPeriod`
+- `xStateListItem.xItemValue` is set to the new absolute deadline
+
+This ensures the task enters the ready list sorted by its new (future) deadline
+rather than the old (expired) one.
+
+**Deadline-aware preemption check (after `prvAddTaskToReadyList`):**
+The existing preemption check compared `uxPriority` to decide if a context switch
+was needed. Added an EDF branch: if both the waking task and the currently running
+task are EDF tasks, compare `xAbsoluteDeadline` instead of `uxPriority`. A context
+switch is triggered if the waking task has an earlier deadline than the currently
+running task.
+
+### `FreeRTOSConfig.h` — MODIFIED
+- Set `configUSE_APPLICATION_TASK_TAG` to `1` (was `0`)
+- Added `traceTASK_SWITCHED_IN` and `traceTASK_SWITCHED_OUT` hook macros that
+  toggle GPIO pins based on task tags, enabling logic analyzer capture of which
+  task is executing at any moment.
