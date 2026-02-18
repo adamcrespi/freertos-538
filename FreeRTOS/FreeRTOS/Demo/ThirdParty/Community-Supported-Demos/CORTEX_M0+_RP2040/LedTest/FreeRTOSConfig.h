@@ -39,6 +39,19 @@
  * See http://www.freertos.org/a00110.html
  *----------------------------------------------------------*/
 
+
+
+// CONFIG ADDED ---------------------------------------------
+#define configUSE_EDF_SCHEDULER         1
+#define configUSE_APPLICATION_TASK_TAG  1
+
+extern void vTracePinHigh(void);
+extern void vTracePinLow(void);
+#define traceTASK_SWITCHED_IN()  vTracePinHigh()
+#define traceTASK_SWITCHED_OUT() vTracePinLow()
+
+
+
 /* Scheduler Related */
 #define configUSE_PREEMPTION                    1
 #define configUSE_TICKLESS_IDLE                 0
@@ -54,7 +67,6 @@
 /* Synchronization Related */
 #define configUSE_MUTEXES                       1
 #define configUSE_RECURSIVE_MUTEXES             1
-#define configUSE_APPLICATION_TASK_TAG          0
 #define configUSE_COUNTING_SEMAPHORES           1
 #define configQUEUE_REGISTRY_SIZE               8
 #define configUSE_QUEUE_SETS                    1

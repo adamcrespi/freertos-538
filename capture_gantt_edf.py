@@ -35,25 +35,25 @@ TASK_SET = {
         "name": "Red (τ1)",
         "color": "#e74c3c",
         "gpio": "GP16",
-        "period": 0.5,          # T (seconds)
-        "deadline": 0.5,        # D (seconds), D <= T
-        "wcet": 0.25,           # C (seconds), for display only
+        "period": 0.4,
+        "deadline": 0.2,
+        "wcet": 0.08,
     },
     1: {
         "name": "Yellow (τ2)",
         "color": "#f1c40f",
         "gpio": "GP17",
-        "period": 1.0,
-        "deadline": 1.0,
-        "wcet": 0.5,
+        "period": 0.8,
+        "deadline": 0.4,
+        "wcet": 0.15,
     },
     2: {
         "name": "Green (τ3)",
         "color": "#2ecc71",
         "gpio": "GP18",
-        "period": 2.0,
-        "deadline": 2.0,
-        "wcet": 1.0,
+        "period": 1.6,
+        "deadline": 1.0,
+        "wcet": 0.4,
     },
 }
 
@@ -189,30 +189,42 @@ def build_intervals(edges, total_time):
     return intervals
 
 
-def compute_deadlines(total_time):
-    """Compute all absolute deadlines for each task over the capture window."""
+def compute_deadlines(total_time, edges):
+    """Compute deadlines aligned to actual first edge."""
     deadlines = {ch: [] for ch in TASK_SET}
 
     for ch, task in TASK_SET.items():
         T = task["period"]
         D = task["deadline"]
-        t = 0.0
-        while t < total_time:
+        first_release = 0.0
+        for edge_type, t in edges.get(ch, []):
+            if edge_type == "rise":
+                first_release = t
+                break
+
+        t = first_release
+        while t < total_time + T:
             abs_deadline = t + D
-            if abs_deadline <= total_time + T:  # include slightly beyond window
-                deadlines[ch].append(abs_deadline)
+            deadlines[ch].append(abs_deadline)
             t += T
 
     return deadlines
 
 
-def compute_releases(total_time):
-    """Compute all release times for each task over the capture window."""
+def compute_releases(total_time, edges):
+    """Compute release times aligned to actual first edge."""
     releases = {ch: [] for ch in TASK_SET}
 
     for ch, task in TASK_SET.items():
         T = task["period"]
-        t = 0.0
+        # Use first rising edge as actual first release
+        first_release = 0.0
+        for edge_type, t in edges.get(ch, []):
+            if edge_type == "rise":
+                first_release = t
+                break
+
+        t = first_release
         while t <= total_time:
             releases[ch].append(t)
             t += T
@@ -413,8 +425,8 @@ def main():
     intervals = build_intervals(edges, total_time)
 
     # Compute theoretical deadlines and releases
-    deadlines = compute_deadlines(total_time)
-    releases = compute_releases(total_time)
+    deadlines = compute_deadlines(total_time, edges)
+    releases = compute_releases(total_time, edges)
 
     # Detect deadline misses
     misses = detect_deadline_misses(intervals, deadlines)

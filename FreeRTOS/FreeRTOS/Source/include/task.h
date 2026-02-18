@@ -287,6 +287,20 @@ typedef enum
 * TASK CREATION API
 *----------------------------------------------------------*/
 
+#if ( configUSE_EDF_SCHEDULER == 1 )
+
+    BaseType_t xTaskCreateEDF( TaskFunction_t pxTaskCode,
+                               const char * const pcName,
+                               const configSTACK_DEPTH_TYPE uxStackDepth,
+                               void * const pvParameters,
+                               TickType_t xPeriod,
+                               TickType_t xRelativeDeadline,
+                               TickType_t xWCET,
+                               TaskHandle_t * const pxCreatedTask );
+
+#endif
+
+
 /**
  * task. h
  * @code{c}
