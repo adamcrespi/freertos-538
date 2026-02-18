@@ -22,9 +22,9 @@ void vLedTask(void *pvParameters) {
     gpio_set_dir(pin, GPIO_OUT);
 
     TickType_t delay;
-    if (pin == LED1_PIN) delay = pdMS_TO_TICKS(250);
-    else if (pin == LED2_PIN) delay = pdMS_TO_TICKS(500);
-    else delay = pdMS_TO_TICKS(1000);
+    if (pin == LED1_PIN) delay = pdMS_TO_TICKS(100);
+    else if (pin == LED2_PIN) delay = pdMS_TO_TICKS(1000);
+    else delay = pdMS_TO_TICKS(50);
 
     printf("[%s] Task started on GPIO %d, delay=%lums\n", pin_to_name(pin), pin, delay);
 
