@@ -1,0 +1,39 @@
+# Ignore everything by default
+*
+
+# Whitelist our gitignore
+!.gitignore
+
+# Whitelist the FreeRTOS kernel source (what we'll modify)
+!FreeRTOS/
+!FreeRTOS/FreeRTOS/
+!FreeRTOS/FreeRTOS/Source/
+!FreeRTOS/FreeRTOS/Source/*.c
+!FreeRTOS/FreeRTOS/Source/include/
+!FreeRTOS/FreeRTOS/Source/include/**
+!FreeRTOS/FreeRTOS/Source/portable/
+!FreeRTOS/FreeRTOS/Source/portable/MemMang/
+!FreeRTOS/FreeRTOS/Source/portable/MemMang/**
+!FreeRTOS/FreeRTOS/Source/portable/ThirdParty/
+!FreeRTOS/FreeRTOS/Source/portable/ThirdParty/GCC/
+!FreeRTOS/FreeRTOS/Source/portable/ThirdParty/GCC/RP2040/
+!FreeRTOS/FreeRTOS/Source/portable/ThirdParty/GCC/RP2040/**
+!FreeRTOS/FreeRTOS/Source/portable/GCC/
+!FreeRTOS/FreeRTOS/Source/portable/GCC/ARM_CM0/
+!FreeRTOS/FreeRTOS/Source/portable/GCC/ARM_CM0/**
+
+# Whitelist the RP2040 demo directory (our working dir)
+!FreeRTOS/FreeRTOS/Demo/
+!FreeRTOS/FreeRTOS/Demo/ThirdParty/
+!FreeRTOS/FreeRTOS/Demo/ThirdParty/Community-Supported-Demos/
+!FreeRTOS/FreeRTOS/Demo/ThirdParty/Community-Supported-Demos/CORTEX_M0+_RP2040/
+!FreeRTOS/FreeRTOS/Demo/ThirdParty/Community-Supported-Demos/CORTEX_M0+_RP2040/*
+!FreeRTOS/FreeRTOS/Demo/ThirdParty/Community-Supported-Demos/CORTEX_M0+_RP2040/LedTest/
+!FreeRTOS/FreeRTOS/Demo/ThirdParty/Community-Supported-Demos/CORTEX_M0+_RP2040/LedTest/**
+
+# Always ignore build artifacts even in whitelisted dirs
+**/build/
+*.uf2
+*.elf
+*.o
+*.d
