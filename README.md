@@ -1,4 +1,6 @@
 # FreeRTOS Real-Time Scheduling Extensions — CPSC 538
+# Adam Crespi and Jordan Werstiuk
+
 
 Extensions to the FreeRTOS kernel to support dynamic-priority scheduling and resource access control, running on a Raspberry Pi Pico (RP2040).
 
@@ -6,12 +8,12 @@ Extensions to the FreeRTOS kernel to support dynamic-priority scheduling and res
 
 This project extends FreeRTOS with four real-time scheduling mechanisms:
 
-| Task | Description | Weight |
-|------|-------------|--------|
-| **EDF** | Earliest Deadline First scheduling with admission control | 15% |
-| **SRP** | Stack Resource Policy for binary semaphores with runtime stack sharing | 15% |
-| **CBS** | Constant Bandwidth Server for aperiodic soft real-time tasks | 15% |
-| **MP** | Multiprocessor real-time scheduling | 15% |
+| Task | Description |
+|------|-------------|
+| **EDF** | Earliest Deadline First scheduling with admission control | 
+| **SRP** | Stack Resource Policy for binary semaphores with runtime stack sharing |
+| **CBS** | Constant Bandwidth Server for aperiodic soft real-time tasks |
+| **MP** | Multiprocessor real-time scheduling |
 
 Each extension is developed on its own branch and includes configuration flags to enable/disable the feature, falling back to stock FreeRTOS behavior when disabled.
 
@@ -55,60 +57,31 @@ Each extension is developed on its own branch and includes configuration flags t
 
 ## Build Instructions
 
-### Prerequisites (Ubuntu/Debian)
-
-```bash
-sudo apt install build-essential cmake ninja-build gcc-arm-none-eabi \
-    libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib git python3 \
-    minicom openocd gdb-multiarch
-```
-
-### Clone and Setup
-
-```bash
-git clone https://github.com/adamcrespi/freertos-538.git
-cd freertos-538
-
-# Clone the Pico SDK separately (not tracked in this repo)
-git clone https://github.com/raspberrypi/pico-sdk.git --recurse-submodules ../pico-sdk
-```
-
 ### Build
 
 ```bash
 cd FreeRTOS/FreeRTOS/Demo/ThirdParty/Community-Supported-Demos/CORTEX_M0+_RP2040
-mkdir build && cd build
-cmake -DPICO_SDK_PATH=~/rtos-project/pico-sdk ..
 make led_test -j$(nproc)
 ```
 
 ### Flash
-
 1. Hold BOOTSEL on Pico, plug in USB, release
 2. `cp LedTest/led_test.uf2 /media/$USER/RPI-RP2/`
 
 ### Serial Monitor
-
 ```bash
 minicom -b 115200 -D /dev/ttyACM0
 ```
 
 ## Schedule Capture Tool
-
 The `capture_gantt.py` script uses an Analog Discovery 2 to capture task execution via GPIO signals and generates a Gantt chart.
 
-### Requirements
+<img width="1400" height="363" alt="test1" src="https://github.com/user-attachments/assets/394a7082-fab3-463d-9c68-edc065d158f1" />
 
-```bash
-pip3 install pydwf matplotlib numpy
-```
-
-Also requires [Digilent WaveForms](https://digilent.com/shop/software/digilent-waveforms/) and Adept Runtime installed.
 
 ### Usage
 
 ```bash
-# Close WaveForms GUI first — only one app can use the AD2
 python3 capture_gantt.py
 ```
 
