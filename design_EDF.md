@@ -3,10 +3,7 @@
 ## Overview
 
 This document describes the design of an Earliest Deadline First (EDF) scheduler
-implemented within the FreeRTOS kernel for the RP2040 (Cortex-M0+). The design
-modifies the minimum number of kernel data structures and code paths to support
-EDF scheduling while preserving stock FreeRTOS behavior for non-EDF tasks and
-when `configUSE_EDF_SCHEDULER == 0`.
+implemented within the FreeRTOS kernel for the RP2040 (Cortex-M0+). 
 
 All kernel modifications are wrapped in `#if ( configUSE_EDF_SCHEDULER == 1 )`
 guards. Setting this flag to 0 in `FreeRTOSConfig.h` compiles out all EDF code
@@ -43,7 +40,7 @@ any EDF task preempts idle, while EDF-to-EDF scheduling is handled by deadline
 ordering rather than the priority field.
 
 On creation, the absolute deadline is computed as `currentTick + D` and the next
-release time as `currentTick + T`. This supports runtime task creation — tasks
+release time as `currentTick + T`. This supports runtime task creation, tasks
 added after the scheduler starts get deadlines relative to their actual creation
 time, not tick 0.
 
@@ -57,10 +54,10 @@ zero cost (no TCB allocated, no stack allocated).
 
 FreeRTOS maintains an array of ready lists, one per priority level. Tasks are
 placed into `pxReadyTasksLists[uxPriority]`. Stock FreeRTOS uses `listINSERT_END()`
-which appends to the tail — ordering doesn't matter because all tasks at the
+which appends to the tail because ordering doesn't matter because all tasks at the
 same priority are round-robined.
 
-For EDF, ordering within the ready list matters — the scheduler must always pick
+For EDF, ordering within the ready list matters, the scheduler must always pick
 the task with the earliest absolute deadline. We modified the `prvAddTaskToReadyList`
 macro to check `xIsEDFTask`:
 
@@ -72,15 +69,6 @@ macro to check `xIsEDFTask`:
 This means in `vTaskSwitchContext()`, selecting the earliest-deadline task is O(1) —
 just grab the head of the priority-1 ready list. The O(n) cost is paid once at
 insertion time, which happens far less frequently than context switches.
-
-### Why not a single global sorted list?
-
-An alternative would be to collapse all EDF tasks into one sorted list regardless
-of priority. We chose to keep the existing priority array structure because:
-
-1. It preserves stock FreeRTOS behavior when `configUSE_EDF_SCHEDULER == 0`
-2. Non-EDF tasks (idle, timer) naturally stay separate at priority 0
-3. The macro change is minimal — one conditional in `prvAddTaskToReadyList`
 
 ---
 
@@ -106,7 +94,7 @@ the system tasks that should not participate in deadline-based scheduling.
 ## 5. Periodic Release Management
 
 EDF tasks are periodic: each job runs, completes, sleeps until the next period,
-then repeats. Managing the transition between jobs is critical — the task's
+then repeats. Managing the transition between jobs is critical, the task's
 absolute deadline must be updated to reflect the new job before it re-enters the
 ready list.
 
@@ -117,7 +105,7 @@ the delayed list for tasks whose wake time has arrived. When a task is removed
 from the delayed list, it is placed back into the ready list via
 `prvAddTaskToReadyList()`.
 
-We insert EDF logic **between** removing the task from the delayed list and
+We insert EDF logic between removing the task from the delayed list and
 adding it to the ready list:
 
 1. Compute the new absolute deadline: `xNextReleaseTime + xRelativeDeadline`
@@ -125,7 +113,7 @@ adding it to the ready list:
 3. Write the new deadline into `xStateListItem.xItemValue`
 
 The task then enters the ready list sorted by its updated deadline, not the old
-one from the previous job. This is essential — without this update, a task that
+one from the previous job. This is essential, without this update, a task that
 finished early would re-enter the ready list with a stale (past) deadline and
 incorrectly receive highest priority.
 
@@ -137,9 +125,7 @@ Stock FreeRTOS triggers a context switch when an unblocked task has higher
 
 We added a deadline comparison: if both the waking task and the current task are
 EDF tasks, compare `xAbsoluteDeadline`. If the waking task's deadline is earlier,
-a context switch is requested. This is what enables preemption — when Red's period
-expires and it wakes up with a deadline earlier than Green's, the scheduler
-immediately switches to Red even though Green hasn't finished its job.
+a context switch is requested. This is what enables preemption.
 
 ### Task execution model
 
@@ -224,10 +210,6 @@ analysis checks the actual time-domain feasibility, which can accept task sets
 that the LL bound rejects. The assignment requires testing with ~100 tasks to
 demonstrate this difference.
 
-Example: a task set with U = 0.95 and carefully chosen D < T values might be
-rejected by LL bound (if applied naively to the D < T case) but accepted by
-processor demand analysis because the deadlines create enough slack.
-
 ---
 
 ## 7. Deadline Miss Handling
@@ -237,10 +219,7 @@ misses. Detection occurs in `xTaskIncrementTick()` — if the current tick excee
 a ready EDF task's `xAbsoluteDeadline`, the counter is incremented.
 
 The current approach is log-and-continue: the miss is recorded but the task
-continues executing. This is appropriate for soft real-time testing and
-demonstration. Alternative strategies (drop the late job, halt the system) could
-be implemented by checking `xDeadlineMissCount` in the task body or a monitoring
-task.
+continues executing.
 
 ---
 

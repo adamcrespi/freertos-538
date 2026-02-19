@@ -35,7 +35,7 @@
 - Zero deadline misses detected by capture tool
 - U = 0.450, LL bound confirms schedulable
 
-**Capture:** `edftest3_fixed.png`
+**Capture:** `images/edftest3_fixed.png`
 
 ## Test 2: EDF with Preemption (Medium Utilization)
 
@@ -66,7 +66,7 @@ running task with a later deadline.
 - Zero deadline misses
 - U = 0.637, schedulable
 
-**Capture:** `edftest_4_fixed.png`
+**Capture:** `images/edftest_4_fixed.png`
 
 ## Test 3: Admission Control — Acceptance
 
@@ -125,47 +125,64 @@ used.
 **Result:** PASS — verified via code inspection and correct accept/reject
 behavior in Tests 3 and 4.
 
-## Test 6: Trace Hook Verification
 
-**Goal:** Verify that GPIO trace hooks accurately reflect task execution,
-including preemption points.
+## Test 6: 100-Task Admission Control Comparison (LL Bound vs Processor Demand)
 
-**Method:**
-- `traceTASK_SWITCHED_IN` sets the task's tagged GPIO HIGH
-- `traceTASK_SWITCHED_OUT` sets it LOW
-- Tags assigned via `vTaskSetApplicationTaskTag()` in each task's init
+**Goal:** Demonstrate that processor demand analysis accepts task sets that the
+Liu & Layland bound rejects, as required by the assignment.
 
-**Verification:**
-- AD2 logic analyzer captures show exactly one GPIO HIGH at any time (no overlap)
-- When preemption occurs, the preempted task's GPIO goes LOW in the same tick
-  that the preempting task's GPIO goes HIGH
-- Idle periods (all GPIOs LOW) correspond to times when no EDF task is ready
+**Method:** A dedicated test program (`main_edf_100test.c`) runs admission control
+on 100 tasks incrementally. No actual FreeRTOS tasks are created — only the
+admission control math executes. A public wrapper `xEDFTestAdmission()` calls
+both `prvEDFCheckLLBound()` and `prvEDFCheckProcessorDemand()` on each task and
+logs both results via UART.
 
-**Result:** PASS — GPIO waveforms match expected EDF schedule.
+**Task Set:**
 
-## Tests Still To Run
+| Parameter | Value |
+|-----------|-------|
+| C | 5 ticks (5ms) |
+| T | 250 ticks (250ms) for all tasks |
+| D | Staggered: 30, 35, 40, ..., 525 ticks (D < T for early tasks) |
+| U per task | 5/250 = 0.020 |
 
-### Test 7: 100-Task Comparison (LL Bound vs Processor Demand)
-**Goal:** Create ~100 tasks and demonstrate that processor demand analysis
-accepts task sets that LL bound rejects when D < T.
+**Why this task set:** With D < T, tasks have slack between their deadline and
+next release. The LL bound ignores this slack and rejects purely based on
+Σ(Ci/Ti) > 1.0. Processor demand analysis checks actual time-domain feasibility
+and can exploit the slack to accept additional tasks.
 
-**Plan:**
-- Generate task sets where Σ(Ci/Ti) > 1.0 but processor demand confirms
-  schedulability (possible when Di < Ti creates sufficient slack)
-- Run both tests, log accept/reject counts
-- Compare acceptance rates
+**Serial Output:**
+`images/admissiontest1.png`
+`images/admissiontest2.png`
 
-### Test 8: Constrained Deadline Test (D < T)
-**Goal:** Run a task set where D < T for all tasks and verify correct
-scheduling.
+**Result:** PASS
+- LL bound rejected at task 51 (U = 1.020 > 1.0)
+- Processor demand accepted task 51 (staggered deadline creates sufficient slack)
+- Processor demand rejected at task 52
+- Demonstrates that PD is strictly less conservative than LL bound for D < T
 
-### Test 9: Deadline Miss Detection
-**Goal:** Intentionally overload the system (U > 1.0, bypass admission control)
-and verify deadline misses are detected and counted.
+**Build and run:**
+```bash
+make edf_100test -j$(nproc)
+cp LedTest/edf_100test.uf2 /media/$USER/RPI-RP2/
+minicom -b 115200 -D /dev/ttyACM0
+```
 
+
+
+
+
+TODO
 ### Test 10: Config Flag Test
 **Goal:** Set `configUSE_EDF_SCHEDULER = 0` and verify the system builds and
 runs with stock FreeRTOS behavior, no EDF code compiled in.
+
+
+
+
+
+
+
 
 
 
