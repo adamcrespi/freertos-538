@@ -2070,6 +2070,27 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
 
         return xReturn;
     }
+    BaseType_t xEDFTestAdmission( TickType_t xWCET,
+                                  TickType_t xPeriod,
+                                  TickType_t xDeadline,
+                                  BaseType_t *pxLLResult,
+                                  BaseType_t *pxPDResult )
+    {
+        /* Run both tests so caller can compare */
+        *pxLLResult = prvEDFCheckLLBound( xWCET, xPeriod );
+        *pxPDResult = prvEDFCheckProcessorDemand( xWCET, xPeriod, xDeadline );
+
+        /* Add to registry (simulates accepting the task) */
+        if( uxEDFTaskCount < configMAX_EDF_TASKS )
+        {
+            xEDFTaskRegistry[ uxEDFTaskCount ].xWCET = xWCET;
+            xEDFTaskRegistry[ uxEDFTaskCount ].xPeriod = xPeriod;
+            xEDFTaskRegistry[ uxEDFTaskCount ].xRelativeDeadline = xDeadline;
+            uxEDFTaskCount++;
+        }
+
+        return pdPASS;
+    }
 
 #endif /* configUSE_EDF_SCHEDULER */
 
