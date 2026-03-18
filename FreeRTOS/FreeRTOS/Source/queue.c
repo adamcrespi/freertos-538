@@ -1683,6 +1683,7 @@ BaseType_t xQueueReceive( QueueHandle_t xQueue,
             ( void ) xQueueGenericSend( xSem, NULL, ( TickType_t ) 0U, queueSEND_TO_BACK );
             ( ( Queue_t * ) xSem )->uxResourceCeiling = uxCeiling;
             ( ( Queue_t * ) xSem )->xMaxCSLength = xMaxCSLength;
+            vSRPRegisterResource( uxCeiling, xMaxCSLength );
         }
 
         return xSem;

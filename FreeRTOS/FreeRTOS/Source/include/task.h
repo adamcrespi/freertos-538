@@ -298,6 +298,7 @@ typedef enum
                                TickType_t xWCET,
                                TaskHandle_t * const pxCreatedTask );
     #if ( configUSE_SRP == 1 )
+        void vSRPRegisterResource( UBaseType_t uxCeiling, TickType_t xMaxCSLength );
         void vSRPPushCeiling( UBaseType_t uxResourceCeiling );
         void vSRPPopCeiling( void );
         UBaseType_t uxSRPGetSystemCeiling( void );

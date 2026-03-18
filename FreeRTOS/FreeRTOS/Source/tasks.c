@@ -1859,6 +1859,12 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
         static UBaseType_t uxSystemCeiling = 0;
         static UBaseType_t uxCeilingStack[ configMAX_SRP_NESTING ];
         static UBaseType_t uxCeilingStackIndex = 0;
+
+        static struct {
+            UBaseType_t uxResourceCeiling;
+            TickType_t  xMaxCSLength;
+        } xSRPResourceRegistry[ configMAX_SRP_RESOURCES ];
+        static UBaseType_t uxSRPResourceCount = 0;
     #endif
 
     /* Registry of admitted EDF tasks for admission control */
@@ -1869,6 +1875,36 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
     } xEDFTaskRegistry[ configMAX_EDF_TASKS ];
 
     static UBaseType_t uxEDFTaskCount = 0;
+
+    #if ( configUSE_SRP == 1 )
+    static TickType_t prvSRPComputeBlockingTime( UBaseType_t uxPreemptionLevel )
+    {
+        /*
+         * Bi = max{ xMaxCSLength | ceiling(Sk) >= πi }
+         *      over all resources Sk
+         *
+         * A task can be blocked by any resource whose ceiling
+         * is >= its own preemption level, because a lower-priority
+         * task holding that resource would raise the system ceiling
+         * high enough to block this task.
+         */
+        TickType_t xMaxBlock = 0;
+        UBaseType_t k;
+
+        for( k = 0; k < uxSRPResourceCount; k++ )
+        {
+            if( xSRPResourceRegistry[ k ].uxResourceCeiling >= uxPreemptionLevel )
+            {
+                if( xSRPResourceRegistry[ k ].xMaxCSLength > xMaxBlock )
+                {
+                    xMaxBlock = xSRPResourceRegistry[ k ].xMaxCSLength;
+                }
+            }
+        }
+
+        return xMaxBlock;
+    }
+    #endif
 
     /*
      * Liu & Layland utilization bound (exact for EDF when D = T).
@@ -1896,6 +1932,40 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
         /* Add candidate task */
         ulTotalUtil += ( ( uint32_t ) xNewWCET * EDF_UTIL_SCALE )
                        / ( uint32_t ) xNewPeriod;
+
+        #if ( configUSE_SRP == 1 )
+        {
+            /* Add max(Bi/Ti) across all tasks including candidate.
+             * Bi = longest CS guarding a resource with ceiling >= πi */
+            uint32_t ulMaxBlockRatio = 0;
+
+            for( i = 0; i < uxEDFTaskCount; i++ )
+            {
+                UBaseType_t uxPL = configMAX_PREEMPTION_LEVEL - xEDFTaskRegistry[ i ].xRelativeDeadline;
+                TickType_t xBi = prvSRPComputeBlockingTime( uxPL );
+                uint32_t ulRatio = ( ( uint32_t ) xBi * EDF_UTIL_SCALE )
+                                   / ( uint32_t ) xEDFTaskRegistry[ i ].xPeriod;
+                if( ulRatio > ulMaxBlockRatio )
+                {
+                    ulMaxBlockRatio = ulRatio;
+                }
+            }
+
+            /* Also check the candidate task (LL bound: D == T) */
+            {
+                UBaseType_t uxNewPL = configMAX_PREEMPTION_LEVEL - xNewPeriod;
+                TickType_t xBi = prvSRPComputeBlockingTime( uxNewPL );
+                uint32_t ulRatio = ( ( uint32_t ) xBi * EDF_UTIL_SCALE )
+                                   / ( uint32_t ) xNewPeriod;
+                if( ulRatio > ulMaxBlockRatio )
+                {
+                    ulMaxBlockRatio = ulRatio;
+                }
+            }
+
+            ulTotalUtil += ulMaxBlockRatio;
+        }
+        #endif
 
         return ( ulTotalUtil <= EDF_UTIL_SCALE ) ? pdTRUE : pdFALSE;
     }
@@ -1969,9 +2039,27 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
                     }
                 }
 
+                #if ( configUSE_SRP == 1 )
+                {
+                    /* Add blocking: B(L) = max CS length of tasks with D > L
+                     * that guard resources with ceiling high enough to block
+                     * tasks with D <= L */
+                    TickType_t xBlockL = 0;
+                    UBaseType_t k;
+                    for( k = 0; k < uxSRPResourceCount; k++ )
+                    {
+                        if( xSRPResourceRegistry[ k ].xMaxCSLength > xBlockL )
+                        {
+                            xBlockL = xSRPResourceRegistry[ k ].xMaxCSLength;
+                        }
+                    }
+                    xDemand += xBlockL;
+                }
+                #endif
+
                 if( xDemand > xL )
                 {
-                    return pdFALSE;  /* Demand exceeds time at this point */
+                    return pdFALSE;
                 }
 
                 xL += axPeriod[ i ];  /* Next deadline of task i */
@@ -2129,6 +2217,16 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
         UBaseType_t uxSRPGetSystemCeiling( void )
         {
             return uxSystemCeiling;
+        }
+
+        void vSRPRegisterResource( UBaseType_t uxCeiling, TickType_t xMaxCSLength )
+        {
+            if( uxSRPResourceCount < configMAX_SRP_RESOURCES )
+            {
+                xSRPResourceRegistry[ uxSRPResourceCount ].uxResourceCeiling = uxCeiling;
+                xSRPResourceRegistry[ uxSRPResourceCount ].xMaxCSLength = xMaxCSLength;
+                uxSRPResourceCount++;
+            }
         }
 
         BaseType_t xSRPCheckPreemptionNeeded( void )
