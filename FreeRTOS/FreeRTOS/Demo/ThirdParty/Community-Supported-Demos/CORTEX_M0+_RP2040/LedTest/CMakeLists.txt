@@ -69,3 +69,18 @@ target_link_libraries(srp_test
 pico_enable_stdio_uart(srp_test 1)
 pico_enable_stdio_usb(srp_test 0)
 pico_add_extra_outputs(srp_test)
+
+add_executable(srp_100test
+    main_srp_100test.c
+)
+target_include_directories(srp_100test PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}
+)
+target_link_libraries(srp_100test
+    pico_stdlib
+    FreeRTOS-Kernel
+    FreeRTOS-Kernel-Heap4
+)
+pico_enable_stdio_uart(srp_100test 1)
+pico_enable_stdio_usb(srp_100test 0)
+pico_add_extra_outputs(srp_100test)
