@@ -238,6 +238,21 @@ typedef struct QueueDefinition   * QueueSetMemberHandle_t;
 /**
  * queue. h
  * @code{c}
+ * QueueHandle_t xQueueCreateBinarySemaphoreSRP( UBaseType_t uxCeiling,
+ *                                              TickType_t xMaxCSLength );
+ * @endcode
+ * 
+ * Creates a new binary semaphore instance that uses the Stack Resource Policy (SRP) for priority management, 
+ * and returns a handle by which the new semaphore can be referenced.
+ */
+#if ( configUSE_SRP == 1 )
+    QueueHandle_t xQueueCreateBinarySemaphoreSRP( UBaseType_t uxCeiling,
+                                                   TickType_t xMaxCSLength );
+#endif
+
+/**
+ * queue. h
+ * @code{c}
  * BaseType_t xQueueGetStaticBuffers( QueueHandle_t xQueue,
  *                                    uint8_t ** ppucQueueStorage,
  *                                    StaticQueue_t ** ppxStaticQueue );

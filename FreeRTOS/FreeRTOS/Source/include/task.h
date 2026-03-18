@@ -297,6 +297,12 @@ typedef enum
                                TickType_t xRelativeDeadline,
                                TickType_t xWCET,
                                TaskHandle_t * const pxCreatedTask );
+    #if ( configUSE_SRP == 1 )
+        void vSRPPushCeiling( UBaseType_t uxResourceCeiling );
+        void vSRPPopCeiling( void );
+        UBaseType_t uxSRPGetSystemCeiling( void );
+        BaseType_t xSRPCheckPreemptionNeeded( void );
+    #endif
     BaseType_t xEDFTestAdmission( TickType_t xWCET,
                                   TickType_t xPeriod,
                                   TickType_t xDeadline,

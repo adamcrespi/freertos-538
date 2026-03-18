@@ -43,6 +43,12 @@
 
 // CONFIG ADDED ---------------------------------------------
 #define configUSE_EDF_SCHEDULER         1
+
+#define configUSE_SRP                   1
+#define configMAX_SRP_NESTING           32
+#define configMAX_PREEMPTION_LEVEL      0xFFFF
+#define configMAX_SRP_RESOURCES         16
+
 #define configUSE_APPLICATION_TASK_TAG  1
 
 extern void vTracePinHigh(void);

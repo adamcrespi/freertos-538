@@ -54,3 +54,18 @@ target_link_libraries(edf_100test
 pico_enable_stdio_uart(edf_100test 1)
 pico_enable_stdio_usb(edf_100test 0)
 pico_add_extra_outputs(edf_100test)
+
+add_executable(srp_test
+    main_srp.c
+)
+target_include_directories(srp_test PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}
+)
+target_link_libraries(srp_test
+    pico_stdlib
+    FreeRTOS-Kernel
+    FreeRTOS-Kernel-Heap4
+)
+pico_enable_stdio_uart(srp_test 1)
+pico_enable_stdio_usb(srp_test 0)
+pico_add_extra_outputs(srp_test)

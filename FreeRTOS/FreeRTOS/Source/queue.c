@@ -133,6 +133,11 @@ typedef struct QueueDefinition /* The old naming convention is used to prevent b
         UBaseType_t uxQueueNumber;
         uint8_t ucQueueType;
     #endif
+
+    #if ( configUSE_SRP == 1 )
+        UBaseType_t uxResourceCeiling;  /**< SRP resource ceiling (0 = not SRP) */
+        TickType_t  xMaxCSLength;       /**< Worst-case critical section length */
+    #endif
 } xQUEUE;
 
 /* The old xQUEUE name is maintained above then typedefed to the new Queue_t
@@ -607,6 +612,13 @@ static void prvInitialiseNewQueue( const UBaseType_t uxQueueLength,
         pxNewQueue->pxQueueSetContainer = NULL;
     }
     #endif /* configUSE_QUEUE_SETS */
+
+    #if ( configUSE_SRP == 1 )
+    {
+        pxNewQueue->uxResourceCeiling = 0;
+        pxNewQueue->xMaxCSLength = 0;
+    }
+    #endif /* configUSE_SRP */
 
     traceQUEUE_CREATE( pxNewQueue );
 }
@@ -1654,6 +1666,30 @@ BaseType_t xQueueReceive( QueueHandle_t xQueue,
         }
     }
 }
+
+/*-----------------------------------------------------------*/
+
+#if ( configUSE_SRP == 1 )
+
+    QueueHandle_t xQueueCreateBinarySemaphoreSRP( UBaseType_t uxCeiling,
+                                                   TickType_t xMaxCSLength )
+    {
+        QueueHandle_t xSem;
+
+        xSem = xQueueGenericCreate( ( UBaseType_t ) 1, queueSEMAPHORE_QUEUE_ITEM_LENGTH, queueQUEUE_TYPE_BINARY_SEMAPHORE );
+
+        if( xSem != NULL )
+        {
+            ( void ) xQueueGenericSend( xSem, NULL, ( TickType_t ) 0U, queueSEND_TO_BACK );
+            ( ( Queue_t * ) xSem )->uxResourceCeiling = uxCeiling;
+            ( ( Queue_t * ) xSem )->xMaxCSLength = xMaxCSLength;
+        }
+
+        return xSem;
+    }
+
+#endif /* configUSE_SRP */
+
 /*-----------------------------------------------------------*/
 
 BaseType_t xQueueSemaphoreTake( QueueHandle_t xQueue,
@@ -1680,6 +1716,22 @@ BaseType_t xQueueSemaphoreTake( QueueHandle_t xQueue,
     #if ( ( INCLUDE_xTaskGetSchedulerState == 1 ) || ( configUSE_TIMERS == 1 ) )
     {
         configASSERT( !( ( xTaskGetSchedulerState() == taskSCHEDULER_SUSPENDED ) && ( xTicksToWait != 0 ) ) );
+    }
+    #endif
+
+    #if ( configUSE_SRP == 1 )
+    if( pxQueue->uxResourceCeiling > 0 )
+    {
+        taskENTER_CRITICAL();
+        {
+            configASSERT( pxQueue->uxMessagesWaiting > 0 );
+            pxQueue->uxMessagesWaiting = 0;
+            vSRPPushCeiling( pxQueue->uxResourceCeiling );
+        }
+        taskEXIT_CRITICAL();
+
+        traceRETURN_xQueueSemaphoreTake( pdPASS );
+        return pdPASS;
     }
     #endif
 
@@ -2403,6 +2455,14 @@ static BaseType_t prvCopyDataToQueue( Queue_t * const pxQueue,
 
     if( pxQueue->uxItemSize == ( UBaseType_t ) 0 )
     {
+        #if ( configUSE_SRP == 1 )
+        if( pxQueue->uxResourceCeiling > 0 )
+        {
+            vSRPPopCeiling();
+            xReturn = xSRPCheckPreemptionNeeded();
+        }
+        else
+        #endif
         #if ( configUSE_MUTEXES == 1 )
         {
             if( pxQueue->uxQueueType == queueQUEUE_IS_MUTEX )

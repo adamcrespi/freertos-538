@@ -107,6 +107,21 @@ typedef QueueHandle_t SemaphoreHandle_t;
 /**
  * semphr. h
  * @code{c}
+ * SemaphoreHandle_t xSemaphoreCreateBinarySRP( UBaseType_t uxCeiling,
+ *                                              TickType_t xMaxCSLength );
+ * @endcode
+ * 
+ * Creates a new binary semaphore instance that uses the Stack Resource Policy (SRP) for priority management, 
+ * and returns a handle by which the new semaphore can be referenced.
+ */
+#if ( configUSE_SRP == 1 )
+    #define xSemaphoreCreateBinarySRP( uxCeiling, xMaxCSLen ) \
+        xQueueCreateBinarySemaphoreSRP( ( uxCeiling ), ( xMaxCSLen ) )
+#endif
+
+/**
+ * semphr. h
+ * @code{c}
  * SemaphoreHandle_t xSemaphoreCreateBinary( void );
  * @endcode
  *

@@ -208,7 +208,7 @@
             List_t * const pxReadyList = &( pxReadyTasksLists[ uxTopPriority ] );           \
             ListItem_t * pxFirstItem = listGET_HEAD_ENTRY( pxReadyList );                   \
             pxCurrentTCB = ( TCB_t * ) listGET_LIST_ITEM_OWNER( pxFirstItem );              \
-        }                                                                                  \
+        }                                                                                                                                                           \
         else                                                                               \
         {                                                                                  \
             /* Stock FreeRTOS: round-robin among same-priority tasks. */                    \
@@ -479,6 +479,9 @@ typedef struct tskTaskControlBlock       /* The old naming convention is used to
         TickType_t xNextReleaseTime;    /**< When the next job becomes ready */
         BaseType_t xIsEDFTask;          /**< pdTRUE if this task uses EDF scheduling */
         UBaseType_t xDeadlineMissCount; /**< Number of deadline misses (for logging/debug) */
+        #if ( configUSE_SRP == 1 )
+            UBaseType_t uxPreemptionLevel;  /**< π — static, shorter D = higher level */
+        #endif
     #endif
 
 } tskTCB;
@@ -1852,6 +1855,12 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
         #define configMAX_EDF_TASKS  128
     #endif
 
+    #if ( configUSE_SRP == 1 )
+        static UBaseType_t uxSystemCeiling = 0;
+        static UBaseType_t uxCeilingStack[ configMAX_SRP_NESTING ];
+        static UBaseType_t uxCeilingStackIndex = 0;
+    #endif
+
     /* Registry of admitted EDF tasks for admission control */
     static struct {
         TickType_t xWCET;
@@ -2050,6 +2059,9 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
             pxNewTCB->xNextReleaseTime = xCurrentTime + xPeriod;
             pxNewTCB->xIsEDFTask = pdTRUE;
             pxNewTCB->xDeadlineMissCount = 0;
+            #if ( configUSE_SRP == 1 )
+                pxNewTCB->uxPreemptionLevel = configMAX_PREEMPTION_LEVEL - xRelativeDeadline;
+            #endif
 
             /* Register task for future admission control checks */
             xEDFTaskRegistry[ uxEDFTaskCount ].xWCET = xWCET;
@@ -2091,6 +2103,58 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
 
         return pdPASS;
     }
+
+    /*--- SRP ceiling stack functions ---*/
+    #if ( configUSE_SRP == 1 )
+
+        void vSRPPushCeiling( UBaseType_t uxResourceCeiling )
+        {
+            configASSERT( uxCeilingStackIndex < configMAX_SRP_NESTING );
+            uxCeilingStack[ uxCeilingStackIndex ] = uxSystemCeiling;
+            uxCeilingStackIndex++;
+
+            if( uxResourceCeiling > uxSystemCeiling )
+            {
+                uxSystemCeiling = uxResourceCeiling;
+            }
+        }
+
+        void vSRPPopCeiling( void )
+        {
+            configASSERT( uxCeilingStackIndex > 0 );
+            uxCeilingStackIndex--;
+            uxSystemCeiling = uxCeilingStack[ uxCeilingStackIndex ];
+        }
+
+        UBaseType_t uxSRPGetSystemCeiling( void )
+        {
+            return uxSystemCeiling;
+        }
+
+        BaseType_t xSRPCheckPreemptionNeeded( void )
+        {
+            List_t * pxReadyList = &( pxReadyTasksLists[ 1 ] );
+            const ListItem_t * pxEnd = listGET_END_MARKER( pxReadyList );
+            ListItem_t * pxItem = listGET_HEAD_ENTRY( pxReadyList );
+
+            while( pxItem != pxEnd )
+            {
+                TCB_t * pxTCB = ( TCB_t * ) listGET_LIST_ITEM_OWNER( pxItem );
+
+                if( pxTCB->uxPreemptionLevel > uxSystemCeiling )
+                {
+                    if( pxTCB->xAbsoluteDeadline < pxCurrentTCB->xAbsoluteDeadline )
+                    {
+                        return pdTRUE;
+                    }
+                    return pdFALSE;
+                }
+                pxItem = listGET_NEXT( pxItem );
+            }
+            return pdFALSE;
+        }
+
+    #endif /* configUSE_SRP */
 
 #endif /* configUSE_EDF_SCHEDULER */
 
@@ -5146,7 +5210,12 @@ BaseType_t xTaskIncrementTick( void )
                             if( ( pxTCB->xIsEDFTask == pdTRUE ) &&
                                 ( pxCurrentTCB->xIsEDFTask == pdTRUE ) )
                             {
+                                #if ( configUSE_SRP == 1 )
+                                if( ( pxTCB->xAbsoluteDeadline < pxCurrentTCB->xAbsoluteDeadline ) &&
+                                    ( pxTCB->uxPreemptionLevel > uxSystemCeiling ) )
+                                #else
                                 if( pxTCB->xAbsoluteDeadline < pxCurrentTCB->xAbsoluteDeadline )
+                                #endif
                                 {
                                     xSwitchRequired = pdTRUE;
                                 }
