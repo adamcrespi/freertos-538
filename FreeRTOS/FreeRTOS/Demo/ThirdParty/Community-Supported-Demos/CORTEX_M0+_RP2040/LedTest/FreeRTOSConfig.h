@@ -45,6 +45,9 @@
 #define configUSE_EDF_SCHEDULER         1
 #define configUSE_APPLICATION_TASK_TAG  1
 
+#define configUSE_CBS                   1
+#define configMAX_CBS_SERVERS           16
+
 extern void vTracePinHigh(void);
 extern void vTracePinLow(void);
 #define traceTASK_SWITCHED_IN()  vTracePinHigh()

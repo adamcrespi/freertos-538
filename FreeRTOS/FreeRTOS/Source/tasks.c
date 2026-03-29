@@ -204,10 +204,27 @@
                                                                                            \
         if( ( configUSE_EDF_SCHEDULER == 1 ) && ( uxTopPriority > 0 ) )                    \
         {                                                                                  \
-            /* EDF: grab the first item in the sorted list (earliest deadline). */          \
             List_t * const pxReadyList = &( pxReadyTasksLists[ uxTopPriority ] );           \
             ListItem_t * pxFirstItem = listGET_HEAD_ENTRY( pxReadyList );                   \
             pxCurrentTCB = ( TCB_t * ) listGET_LIST_ITEM_OWNER( pxFirstItem );              \
+            if( ( configUSE_CBS == 1 ) && ( pxCurrentTCB->xIsCBSTask != pdTRUE ) )         \
+            {                                                                              \
+                const ListItem_t * pxEnd = listGET_END_MARKER( pxReadyList );              \
+                ListItem_t * pxNext = listGET_NEXT( pxFirstItem );                         \
+                TickType_t xHeadDeadline = listGET_LIST_ITEM_VALUE( pxFirstItem );         \
+                while( pxNext != pxEnd )                                                   \
+                {                                                                          \
+                    if( listGET_LIST_ITEM_VALUE( pxNext ) != xHeadDeadline )               \
+                        break;                                                             \
+                    TCB_t * pxNextTCB = ( TCB_t * ) listGET_LIST_ITEM_OWNER( pxNext );     \
+                    if( pxNextTCB->xIsCBSTask == pdTRUE )                                  \
+                    {                                                                      \
+                        pxCurrentTCB = pxNextTCB;                                          \
+                        break;                                                             \
+                    }                                                                      \
+                    pxNext = listGET_NEXT( pxNext );                                       \
+                }                                                                          \
+            }                                                                              \
         }                                                                                  \
         else                                                                               \
         {                                                                                  \
@@ -479,7 +496,13 @@ typedef struct tskTaskControlBlock       /* The old naming convention is used to
         TickType_t xNextReleaseTime;    /**< When the next job becomes ready */
         BaseType_t xIsEDFTask;          /**< pdTRUE if this task uses EDF scheduling */
         UBaseType_t xDeadlineMissCount; /**< Number of deadline misses (for logging/debug) */
-    #endif
+        #if ( configUSE_CBS == 1 )
+            BaseType_t xIsCBSTask;        /* pdTRUE if managed by a CBS */
+            TickType_t xCBSBudget;        /* qs — current remaining budget */
+            TickType_t xCBSMaxBudget;     /* Qs — max budget per period */
+            TickType_t xCBSServerPeriod;  /* Ts — server replenishment period */
+        #endif /* configUSE_CBS */
+    #endif /* configUSE_EDF_SCHEDULER */
 
 } tskTCB;
 
@@ -2050,6 +2073,12 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
             pxNewTCB->xNextReleaseTime = xCurrentTime + xPeriod;
             pxNewTCB->xIsEDFTask = pdTRUE;
             pxNewTCB->xDeadlineMissCount = 0;
+            #if ( configUSE_CBS == 1 )
+                pxNewTCB->xIsCBSTask = pdFALSE;
+                pxNewTCB->xCBSBudget = 0;
+                pxNewTCB->xCBSMaxBudget = 0;
+                pxNewTCB->xCBSServerPeriod = 0;
+            #endif
 
             /* Register task for future admission control checks */
             xEDFTaskRegistry[ uxEDFTaskCount ].xWCET = xWCET;
@@ -2091,9 +2120,72 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
 
         return pdPASS;
     }
+    # if ( configUSE_CBS == 1 )
+        BaseType_t xTaskCreateCBS( TaskFunction_t pxTaskCode,
+                                const char * const pcName,
+                                const configSTACK_DEPTH_TYPE uxStackDepth,
+                                void * const pvParameters,
+                                TickType_t xServerBudget,    /* Qs */
+                                TickType_t xServerPeriod,    /* Ts */
+                                TaskHandle_t * const pxCreatedTask )
+        {
+            TCB_t * pxNewTCB;
+            BaseType_t xReturn;
+            TickType_t xCurrentTime;
+
+            /* Admission control: Qs/Ts is the CBS bandwidth contribution */
+            if( prvEDFAdmissionControl( xServerBudget, xServerPeriod, xServerPeriod ) == pdFALSE )
+            {
+                return errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
+            }
+
+            if( uxEDFTaskCount >= configMAX_EDF_TASKS )
+            {
+                return errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
+            }
+
+            xCurrentTime = xTaskGetTickCount();
+
+            pxNewTCB = prvCreateTask( pxTaskCode, pcName, uxStackDepth, pvParameters, 1, pxCreatedTask );
+
+            if( pxNewTCB != NULL )
+            {
+                /* EDF fields — CBS uses these for scheduling */
+                pxNewTCB->xPeriod = xServerPeriod;
+                pxNewTCB->xRelativeDeadline = xServerPeriod;
+                pxNewTCB->xWCET = xServerBudget;
+                pxNewTCB->xAbsoluteDeadline = xCurrentTime + xServerPeriod;
+                pxNewTCB->xNextReleaseTime = xCurrentTime + xServerPeriod;
+                pxNewTCB->xIsEDFTask = pdTRUE;
+                pxNewTCB->xDeadlineMissCount = 0;
+
+                /* CBS-specific fields */
+                pxNewTCB->xIsCBSTask = pdTRUE;
+                pxNewTCB->xCBSBudget = xServerBudget;
+                pxNewTCB->xCBSMaxBudget = xServerBudget;
+                pxNewTCB->xCBSServerPeriod = xServerPeriod;
+
+                /* Register for admission control (Qs as WCET, Ts as period) */
+                xEDFTaskRegistry[ uxEDFTaskCount ].xWCET = xServerBudget;
+                xEDFTaskRegistry[ uxEDFTaskCount ].xPeriod = xServerPeriod;
+                xEDFTaskRegistry[ uxEDFTaskCount ].xRelativeDeadline = xServerPeriod;
+                uxEDFTaskCount++;
+
+                listSET_LIST_ITEM_VALUE( &( pxNewTCB->xStateListItem ), pxNewTCB->xAbsoluteDeadline );
+
+                prvAddNewTaskToReadyList( pxNewTCB );
+                xReturn = pdPASS;
+            }
+            else
+            {
+                xReturn = errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
+            }
+
+            return xReturn;
+        }
+    #endif /* configUSE_CBS */
 
 #endif /* configUSE_EDF_SCHEDULER */
-
 
 
 
@@ -5051,7 +5143,37 @@ BaseType_t xTaskIncrementTick( void )
         else
         {
             mtCOVERAGE_TEST_MARKER();
-        }
+        }   
+
+        #if ( configUSE_CBS == 1 )
+            if( ( pxCurrentTCB->xIsCBSTask == pdTRUE ) &&
+                ( pxCurrentTCB->xCBSBudget > 0 ) )
+            {
+                pxCurrentTCB->xCBSBudget--;
+
+                if( pxCurrentTCB->xCBSBudget == 0 )
+                {
+                    /* Budget exhausted — postpone deadline, replenish */
+                    pxCurrentTCB->xAbsoluteDeadline += pxCurrentTCB->xCBSServerPeriod;
+                    pxCurrentTCB->xCBSBudget = pxCurrentTCB->xCBSMaxBudget;
+
+                    /* Update list item value so ready list re-sorts */
+                    listSET_LIST_ITEM_VALUE( &( pxCurrentTCB->xStateListItem ),
+                                            pxCurrentTCB->xAbsoluteDeadline );
+
+                    /* Remove and re-insert into ready list with new deadline */
+                    if( listIS_CONTAINED_WITHIN( &( pxReadyTasksLists[ pxCurrentTCB->uxPriority ] ),
+                                                &( pxCurrentTCB->xStateListItem ) ) == pdTRUE )
+                    {
+                        uxListRemove( &( pxCurrentTCB->xStateListItem ) );
+                        prvAddTaskToReadyList( pxCurrentTCB );
+                    }
+
+                    /* Force context switch — a periodic task may now have earlier deadline */
+                    xSwitchRequired = pdTRUE;
+                }
+            }
+        #endif /* configUSE_CBS */
 
         /* See if this tick has made a timeout expire.  Tasks are stored in
          * the  queue in the order of their wake time - meaning once one task
@@ -5115,17 +5237,38 @@ BaseType_t xTaskIncrementTick( void )
                     /* Place the unblocked task into the appropriate ready
                      * list. */
 
-                    //EDF CHANGES -------------------------------------------------------------------
+                    //EDF + CBS CHANGES -------------------------------------------------------------------
                     #if ( configUSE_EDF_SCHEDULER == 1 )
                     {
                         if( pxTCB->xIsEDFTask == pdTRUE )
                         {
-                            pxTCB->xAbsoluteDeadline = pxTCB->xNextReleaseTime + pxTCB->xRelativeDeadline;
-                            pxTCB->xNextReleaseTime += pxTCB->xPeriod;
-                            listSET_LIST_ITEM_VALUE( &( pxTCB->xStateListItem ), pxTCB->xAbsoluteDeadline );
+                            #if ( configUSE_CBS == 1 )
+                            if( pxTCB->xIsCBSTask == pdTRUE )
+                            {
+                                /* CBS Rule 2: check if budget is too large for remaining time */
+                                TickType_t xNow = xConstTickCount;
+                                TickType_t xTimeToDeadline = pxTCB->xAbsoluteDeadline - xNow;
+                                if( ( pxTCB->xCBSBudget * pxTCB->xCBSServerPeriod ) >
+                                    ( xTimeToDeadline * pxTCB->xCBSMaxBudget ) )
+                                {
+                                    pxTCB->xAbsoluteDeadline = xNow + pxTCB->xCBSServerPeriod;
+                                    pxTCB->xCBSBudget = pxTCB->xCBSMaxBudget;
+                                }
+                                listSET_LIST_ITEM_VALUE( &( pxTCB->xStateListItem ),
+                                                          pxTCB->xAbsoluteDeadline );
+                            }
+                            else
+                            #endif
+                            {
+                                /* Regular EDF periodic task */
+                                pxTCB->xAbsoluteDeadline = pxTCB->xNextReleaseTime + pxTCB->xRelativeDeadline;
+                                pxTCB->xNextReleaseTime += pxTCB->xPeriod;
+                                listSET_LIST_ITEM_VALUE( &( pxTCB->xStateListItem ), pxTCB->xAbsoluteDeadline );
+                            }
                         }
                     }
                     #endif
+
                     prvAddTaskToReadyList( pxTCB );
 
                     /* A task being unblocked cannot cause an immediate

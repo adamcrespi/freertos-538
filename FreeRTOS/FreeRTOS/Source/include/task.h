@@ -304,6 +304,16 @@ typedef enum
                                   BaseType_t *pxPDResult );
 #endif
 
+#if ( configUSE_CBS == 1 )
+    BaseType_t xTaskCreateCBS( TaskFunction_t pxTaskCode,
+                                const char * const pcName,
+                                const configSTACK_DEPTH_TYPE uxStackDepth,
+                                void * const pvParameters,
+                                TickType_t xServerBudget,
+                                TickType_t xServerPeriod,
+                                TaskHandle_t * const pxCreatedTask );
+#endif
+
 
 /**
  * task. h
