@@ -296,6 +296,7 @@ typedef enum
                                TickType_t xPeriod,
                                TickType_t xRelativeDeadline,
                                TickType_t xWCET,
+                               BaseType_t xCorePreference,
                                TaskHandle_t * const pxCreatedTask );
     BaseType_t xEDFTestAdmission( TickType_t xWCET,
                                   TickType_t xPeriod,

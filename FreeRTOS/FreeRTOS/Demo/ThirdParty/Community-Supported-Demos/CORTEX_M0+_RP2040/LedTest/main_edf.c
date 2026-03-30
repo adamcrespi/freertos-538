@@ -167,22 +167,22 @@ int main( void )
             (float)TASK3_WCET / (float)TASK3_PERIOD );
     printf( "========================================\n\n" );
 
-    /* Create EDF tasks */
+    /* Create EDF tasks — xCorePreference=-1 means global/auto assignment */
     xResult = xTaskCreateEDF( vEDFTask, "Red", 512, &xTask1Params,
-                              TASK1_PERIOD, TASK1_DEADLINE, TASK1_WCET, NULL );
+                              TASK1_PERIOD, TASK1_DEADLINE, TASK1_WCET, -1, NULL );
     printf( "Create Red:    %s\n", xResult == pdPASS ? "OK" : "FAIL" );
 
     xResult = xTaskCreateEDF( vEDFTask, "Yellow", 512, &xTask2Params,
-                              TASK2_PERIOD, TASK2_DEADLINE, TASK2_WCET, NULL );
+                              TASK2_PERIOD, TASK2_DEADLINE, TASK2_WCET, -1, NULL );
     printf( "Create Yellow: %s\n", xResult == pdPASS ? "OK" : "FAIL" );
 
     xResult = xTaskCreateEDF( vEDFTask, "Green", 512, &xTask3Params,
-                              TASK3_PERIOD, TASK3_DEADLINE, TASK3_WCET, NULL );
+                              TASK3_PERIOD, TASK3_DEADLINE, TASK3_WCET, -1, NULL );
     printf( "Create Green:  %s\n", xResult == pdPASS ? "OK" : "FAIL" );
-    
-    // rejection test.
+
+    /* Rejection test — total U would exceed 2.0 bound */
     xResult = xTaskCreateEDF( vEDFTask, "Reject", 512, &xTask1Params,
-                              pdMS_TO_TICKS(200), pdMS_TO_TICKS(200), pdMS_TO_TICKS(150), NULL );
+                              pdMS_TO_TICKS(200), pdMS_TO_TICKS(200), pdMS_TO_TICKS(150), -1, NULL );
     printf( "Create Reject: %s (expected FAIL)\n", xResult == pdPASS ? "OK" : "FAIL" );
 
     printf( "\nStarting scheduler...\n" );

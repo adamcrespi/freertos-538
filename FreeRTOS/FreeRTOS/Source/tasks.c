@@ -603,6 +603,13 @@ static BaseType_t prvCreateIdleTasks( void );
  * Selects the highest priority available task for the given core.
  */
     static void prvSelectHighestPriorityTask( BaseType_t xCoreID );
+
+/* EDF SMP: yield whichever core(s) are running a task with a later
+ * deadline than pxTCB, so pxTCB can preempt them. */
+    #if ( configUSE_EDF_SCHEDULER == 1 )
+        static void prvYieldForEDFTask( const TCB_t * pxTCB );
+    #endif
+
 #endif /* #if ( configNUMBER_OF_CORES > 1 ) */
 
 /**
@@ -1033,6 +1040,53 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
 #endif /* #if ( configNUMBER_OF_CORES > 1 ) */
 /*-----------------------------------------------------------*/
 
+/* EDF SMP ADDITION -------------------------------------------------------
+ * prvYieldForEDFTask: called when an EDF task pxTCB becomes ready with a
+ * fresh (possibly earlier) absolute deadline.  Checks every core; if the
+ * task currently running on that core has a LATER deadline, requests a
+ * yield so pxTCB can preempt it.
+ *
+ * For partitioned EDF, the task's uxCoreAffinityMask restricts which cores
+ * are checked — a pinned task can only preempt its own assigned core.
+ * -----------------------------------------------------------------------*/
+#if ( configNUMBER_OF_CORES > 1 ) && ( configUSE_EDF_SCHEDULER == 1 )
+    static void prvYieldForEDFTask( const TCB_t * pxTCB )
+    {
+        BaseType_t xCoreID;
+
+        /* Must be called from a critical section (tick ISR already holds it). */
+        for( xCoreID = 0; xCoreID < ( BaseType_t ) configNUMBER_OF_CORES; xCoreID++ )
+        {
+            /* Skip cores this task is not allowed to run on (partitioned EDF). */
+            #if ( configUSE_CORE_AFFINITY == 1 )
+            if( ( pxTCB->uxCoreAffinityMask & ( ( UBaseType_t ) 1U << ( UBaseType_t ) xCoreID ) ) == 0U )
+            {
+                continue;
+            }
+            #endif
+
+            /* Yield this core if:
+             *   (a) it is running an EDF task with a later deadline, OR
+             *   (b) it is running a non-EDF task (idle, lower-priority)
+             *       and the new task CAN run here (affinity already checked above).
+             * Case (b) handles wakeups while both cores sit on idle. */
+            if( pxCurrentTCBs[ xCoreID ]->xIsEDFTask == pdTRUE )
+            {
+                if( pxTCB->xAbsoluteDeadline < pxCurrentTCBs[ xCoreID ]->xAbsoluteDeadline )
+                {
+                    prvYieldCore( xCoreID );
+                }
+            }
+            else if( pxCurrentTCBs[ xCoreID ]->uxPriority < pxTCB->uxPriority )
+            {
+                /* Running task is lower priority (e.g. idle) — preempt it. */
+                prvYieldCore( xCoreID );
+            }
+        }
+    }
+#endif /* configNUMBER_OF_CORES > 1 && configUSE_EDF_SCHEDULER */
+/*-----------------------------------------------------------*/
+
 #if ( configNUMBER_OF_CORES > 1 )
     static void prvSelectHighestPriorityTask( BaseType_t xCoreID )
     {
@@ -1065,8 +1119,21 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
                                      &pxCurrentTCBs[ xCoreID ]->xStateListItem ) == pdTRUE )
         {
             ( void ) uxListRemove( &pxCurrentTCBs[ xCoreID ]->xStateListItem );
-            vListInsertEnd( &( pxReadyTasksLists[ pxCurrentTCBs[ xCoreID ]->uxPriority ] ),
-                            &pxCurrentTCBs[ xCoreID ]->xStateListItem );
+            /* EDF: re-insert sorted by absolute deadline so the list stays
+             * in deadline order.  Stock FreeRTOS uses vListInsertEnd for
+             * round-robin fairness; that would corrupt our sorted list. */
+            #if ( configUSE_EDF_SCHEDULER == 1 )
+            if( pxCurrentTCBs[ xCoreID ]->xIsEDFTask == pdTRUE )
+            {
+                vListInsert( &( pxReadyTasksLists[ pxCurrentTCBs[ xCoreID ]->uxPriority ] ),
+                             &pxCurrentTCBs[ xCoreID ]->xStateListItem );
+            }
+            else
+            #endif /* configUSE_EDF_SCHEDULER */
+            {
+                vListInsertEnd( &( pxReadyTasksLists[ pxCurrentTCBs[ xCoreID ]->uxPriority ] ),
+                                &pxCurrentTCBs[ xCoreID ]->xStateListItem );
+            }
         }
 
         while( xTaskScheduled == pdFALSE )
@@ -1848,6 +1915,23 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
 
 /* EDF TASK CREATE ----------------------------------------------------------------------*/
 #if ( configUSE_EDF_SCHEDULER == 1 )
+    /* Default multiprocessor mode: if the user does not specify either flag,
+     * global EDF is used (assignment requirement: global is the default). */
+    #if ( configNUMBER_OF_CORES > 1 )
+        #if !defined( GLOBAL_EDF_ENABLE ) && !defined( PARTITIONED_EDF_ENABLE )
+            #define GLOBAL_EDF_ENABLE      1
+            #define PARTITIONED_EDF_ENABLE 0
+        #elif defined( GLOBAL_EDF_ENABLE ) && !defined( PARTITIONED_EDF_ENABLE )
+            #define PARTITIONED_EDF_ENABLE 0
+        #elif !defined( GLOBAL_EDF_ENABLE ) && defined( PARTITIONED_EDF_ENABLE )
+            #define GLOBAL_EDF_ENABLE 0
+        #elif ( GLOBAL_EDF_ENABLE == 0 ) && ( PARTITIONED_EDF_ENABLE == 0 )
+            /* Both explicitly 0 — still default to global */
+            #undef  GLOBAL_EDF_ENABLE
+            #define GLOBAL_EDF_ENABLE 1
+        #endif
+    #endif /* configNUMBER_OF_CORES > 1 */
+
     #ifndef configMAX_EDF_TASKS
         #define configMAX_EDF_TASKS  128
     #endif
@@ -1976,6 +2060,11 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
      * Main admission control entry point.
      * Automatically selects LL bound (all D == T) or processor demand (any D < T).
      * Returns pdTRUE if the new task can be admitted.
+     *
+     * For GLOBAL_EDF_ENABLE  : checks total utilisation ≤ configNUMBER_OF_CORES.
+     * For PARTITIONED_EDF    : checks per-core utilisation ≤ 1 (called with
+     *                          the per-core registry via prvPartitionedAdmit).
+     * For single-core (legacy): checks ≤ 1 as before.
      */
     static BaseType_t prvEDFAdmissionControl( TickType_t xNewWCET,
                                               TickType_t xNewPeriod,
@@ -1983,6 +2072,7 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
     {
         UBaseType_t i;
         BaseType_t xAllImplicit = pdTRUE;
+        uint32_t ulBound;
 
         /* Check if all tasks (existing + new) have D == T */
         for( i = 0; i < uxEDFTaskCount; i++ )
@@ -1998,15 +2088,87 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
             xAllImplicit = pdFALSE;
         }
 
+        /* Global EDF on m cores: sufficient test is Σ(Ci/Ti) ≤ m.
+         * Single-core / partitioned per-core: Σ(Ci/Ti) ≤ 1. */
+        #if ( configNUMBER_OF_CORES > 1 ) && ( GLOBAL_EDF_ENABLE == 1 )
+            ulBound = EDF_UTIL_SCALE * ( uint32_t ) configNUMBER_OF_CORES;
+        #else
+            ulBound = EDF_UTIL_SCALE;
+        #endif
+
         if( xAllImplicit == pdTRUE )
         {
-            return prvEDFCheckLLBound( xNewWCET, xNewPeriod );
+            /* LL bound adapted for the utilisation budget */
+            uint32_t ulTotalUtil = 0;
+            for( i = 0; i < uxEDFTaskCount; i++ )
+            {
+                ulTotalUtil += ( ( uint32_t ) xEDFTaskRegistry[ i ].xWCET * EDF_UTIL_SCALE )
+                               / ( uint32_t ) xEDFTaskRegistry[ i ].xPeriod;
+            }
+            ulTotalUtil += ( ( uint32_t ) xNewWCET * EDF_UTIL_SCALE ) / ( uint32_t ) xNewPeriod;
+            return ( ulTotalUtil <= ulBound ) ? pdTRUE : pdFALSE;
         }
         else
         {
+            /* Processor demand is only meaningful for single-core / partitioned
+             * (each core independently). For global SMP with D<T it is still
+             * a valid per-core lower bound; use it conservatively. */
             return prvEDFCheckProcessorDemand( xNewWCET, xNewPeriod, xNewDeadline );
         }
     }
+
+    /* ── Partitioned EDF helpers ─────────────────────────────────────────
+     * Each core keeps its own (C,T,D) registry and utilisation total.
+     * These are separate from the global uxEDFTaskRegistry used by global EDF.
+     */
+    #if ( PARTITIONED_EDF_ENABLE == 1 )
+        #ifndef configMAX_EDF_TASKS_PER_CORE
+            #define configMAX_EDF_TASKS_PER_CORE  64
+        #endif
+
+        static struct {
+            TickType_t xWCET;
+            TickType_t xPeriod;
+        } xCoreRegistry[ configNUMBER_OF_CORES ][ configMAX_EDF_TASKS_PER_CORE ];
+
+        static UBaseType_t uxCoreTaskCount[ configNUMBER_OF_CORES ] = { 0 };
+        static uint32_t    ulCoreUtil[ configNUMBER_OF_CORES ] = { 0 };
+
+        /* Returns the best core (worst-fit: most remaining capacity) that can
+         * admit a task with utilisation xWCET/xPeriod, or -1 if no core fits. */
+        static BaseType_t prvPartitionedAssignCore( TickType_t xWCET,
+                                                    TickType_t xPeriod )
+        {
+            uint32_t ulUtil = ( ( uint32_t ) xWCET * EDF_UTIL_SCALE ) / ( uint32_t ) xPeriod;
+            BaseType_t xBestCore = -1;
+            uint32_t ulLowest = UINT32_MAX;
+            BaseType_t c;
+
+            for( c = 0; c < ( BaseType_t ) configNUMBER_OF_CORES; c++ )
+            {
+                if( ( ulCoreUtil[ c ] + ulUtil <= EDF_UTIL_SCALE ) &&
+                    ( uxCoreTaskCount[ c ] < configMAX_EDF_TASKS_PER_CORE ) &&
+                    ( ulCoreUtil[ c ] < ulLowest ) )
+                {
+                    ulLowest = ulCoreUtil[ c ];
+                    xBestCore = c;
+                }
+            }
+            return xBestCore;
+        }
+
+        /* Commit a task to a specific core's registry. */
+        static void prvPartitionedRegister( BaseType_t xCoreID,
+                                            TickType_t xWCET,
+                                            TickType_t xPeriod )
+        {
+            UBaseType_t ux = uxCoreTaskCount[ xCoreID ];
+            xCoreRegistry[ xCoreID ][ ux ].xWCET = xWCET;
+            xCoreRegistry[ xCoreID ][ ux ].xPeriod = xPeriod;
+            uxCoreTaskCount[ xCoreID ]++;
+            ulCoreUtil[ xCoreID ] += ( ( uint32_t ) xWCET * EDF_UTIL_SCALE ) / ( uint32_t ) xPeriod;
+        }
+    #endif /* PARTITIONED_EDF_ENABLE */
 
 
     BaseType_t xTaskCreateEDF( TaskFunction_t pxTaskCode,
@@ -2016,23 +2178,52 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
                                TickType_t xPeriod,
                                TickType_t xRelativeDeadline,
                                TickType_t xWCET,
+                               BaseType_t xCorePreference,
                                TaskHandle_t * const pxCreatedTask )
     {
         TCB_t * pxNewTCB;
         BaseType_t xReturn;
         TickType_t xCurrentTime;
+        BaseType_t xAssignedCore = 0;   /* only meaningful for partitioned */
 
-        /* Admission control: reject if system would become unschedulable */
-        if( prvEDFAdmissionControl( xWCET, xPeriod, xRelativeDeadline ) == pdFALSE )
+        /* ── Admission control ────────────────────────────────────────── */
+        #if ( PARTITIONED_EDF_ENABLE == 1 )
         {
-            return errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
+            /* Partitioned: check per-core capacity and find a core. */
+            if( xCorePreference >= 0 && xCorePreference < ( BaseType_t ) configNUMBER_OF_CORES )
+            {
+                /* User specified a core — verify it fits. */
+                uint32_t ulUtil = ( ( uint32_t ) xWCET * EDF_UTIL_SCALE ) / ( uint32_t ) xPeriod;
+                if( ulCoreUtil[ xCorePreference ] + ulUtil > EDF_UTIL_SCALE )
+                {
+                    return errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
+                }
+                xAssignedCore = xCorePreference;
+            }
+            else
+            {
+                /* Auto-assign: worst-fit heuristic */
+                xAssignedCore = prvPartitionedAssignCore( xWCET, xPeriod );
+                if( xAssignedCore < 0 )
+                {
+                    return errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
+                }
+            }
         }
-
-        /* Registry full check */
-        if( uxEDFTaskCount >= configMAX_EDF_TASKS )
+        #else
         {
-            return errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
+            /* Global EDF or single-core: use the global registry. */
+            ( void ) xCorePreference;
+            if( prvEDFAdmissionControl( xWCET, xPeriod, xRelativeDeadline ) == pdFALSE )
+            {
+                return errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
+            }
+            if( uxEDFTaskCount >= configMAX_EDF_TASKS )
+            {
+                return errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY;
+            }
         }
+        #endif
 
         xCurrentTime = xTaskGetTickCount();
 
@@ -2051,11 +2242,33 @@ static void prvAddNewTaskToReadyList( TCB_t * pxNewTCB ) PRIVILEGED_FUNCTION;
             pxNewTCB->xIsEDFTask = pdTRUE;
             pxNewTCB->xDeadlineMissCount = 0;
 
-            /* Register task for future admission control checks */
-            xEDFTaskRegistry[ uxEDFTaskCount ].xWCET = xWCET;
-            xEDFTaskRegistry[ uxEDFTaskCount ].xPeriod = xPeriod;
-            xEDFTaskRegistry[ uxEDFTaskCount ].xRelativeDeadline = xRelativeDeadline;
-            uxEDFTaskCount++;
+            /* ── Core affinity ────────────────────────────────────────── */
+            #if ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 )
+            {
+                #if ( PARTITIONED_EDF_ENABLE == 1 )
+                {
+                    /* Pin to the assigned core */
+                    pxNewTCB->uxCoreAffinityMask = ( UBaseType_t ) 1U << ( UBaseType_t ) xAssignedCore;
+                    prvPartitionedRegister( xAssignedCore, xWCET, xPeriod );
+                }
+                #else
+                {
+                    /* Global EDF: allow both cores */
+                    pxNewTCB->uxCoreAffinityMask = ( UBaseType_t ) configTASK_DEFAULT_CORE_AFFINITY;
+                }
+                #endif
+            }
+            #endif /* configNUMBER_OF_CORES > 1 */
+
+            /* ── Global registry (used for global EDF / single-core) ──── */
+            #if ( PARTITIONED_EDF_ENABLE != 1 )
+            {
+                xEDFTaskRegistry[ uxEDFTaskCount ].xWCET = xWCET;
+                xEDFTaskRegistry[ uxEDFTaskCount ].xPeriod = xPeriod;
+                xEDFTaskRegistry[ uxEDFTaskCount ].xRelativeDeadline = xRelativeDeadline;
+                uxEDFTaskCount++;
+            }
+            #endif
 
             /* Set xItemValue to absolute deadline so ready list sorts by deadline */
             listSET_LIST_ITEM_VALUE( &( pxNewTCB->xStateListItem ), pxNewTCB->xAbsoluteDeadline );
@@ -5166,7 +5379,20 @@ BaseType_t xTaskIncrementTick( void )
                         }
                         #else /* #if( configNUMBER_OF_CORES == 1 ) */
                         {
-                            prvYieldForTask( pxTCB );
+                            /* EDF SMP: use deadline-aware yield so we only
+                             * preempt cores whose current task has a later
+                             * deadline.  Fall back to the generic priority
+                             * yield for non-EDF tasks. */
+                            #if ( configUSE_EDF_SCHEDULER == 1 )
+                            if( pxTCB->xIsEDFTask == pdTRUE )
+                            {
+                                prvYieldForEDFTask( pxTCB );
+                            }
+                            else
+                            #endif /* configUSE_EDF_SCHEDULER */
+                            {
+                                prvYieldForTask( pxTCB );
+                            }
                         }
                         #endif /* #if( configNUMBER_OF_CORES == 1 ) */
                     }

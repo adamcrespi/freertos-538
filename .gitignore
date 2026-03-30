@@ -38,5 +38,7 @@
 *.o
 *.d
 !README.md
+!higher_level.md
 !capture_gantt.py
 !capture_gantt_edf.py
+!capture_gantt_mp.py
