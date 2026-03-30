@@ -40,3 +40,5 @@
 !README.md
 !capture_gantt.py
 !capture_gantt_edf.py
+!images/
+!images/**

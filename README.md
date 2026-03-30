@@ -87,17 +87,23 @@ Green runs for 400ms but Red's period is 400ms — Red releases mid-way through 
 
 Captured with `capture_gantt_edf.py` via AD2 logic analyzer.
 
-### Test 1 — Sequential execution, no preemption
+### Test 1 — Sequential execution, no preemption (U = 0.450)
 
-<!-- Add Gantt chart image here -->
+![Test 1 Gantt](images/test1_low_util.png)
 
-### Test 2 — Preemption visible
+Red runs first (D=250ms), then Yellow (D=500ms), then Green (D=1000ms). Each task finishes well before its deadline — no preemption occurs.
 
-<!-- Add Gantt chart image here -->
+### Test 2 — Preemption visible (U = 0.637)
 
-### Admission Control Test (100 tasks, LL bound vs processor demand)
+![Test 2 Gantt](images/test2_preemption.png)
 
-<!-- Add serial output screenshot here -->
+Green (C=400ms, T=1600ms) is split across multiple segments — Red preempts it mid-execution each period because Red's new job has an earlier deadline. Preemption points are visible as gaps in Green's bar.
+
+### Overloaded system (U = 1.500) — deadline misses
+
+![Overloaded Gantt](images/test3_overloaded.png)
+
+U > 1.0 — EDF cannot meet all deadlines. Red deadline misses (red ▼ markers) appear regularly. This is what the admission control test prevents from happening at runtime.
 
 ---
 
@@ -137,6 +143,20 @@ Processor demand rejected at task 52
 ```
 Processor demand admits 1 more task than LL bound — proof that PD is strictly
 less conservative when D < T.
+
+### Serial output — tasks 1–54 (divergence point)
+
+![Admission test part 1](images/admissiontest1.png)
+
+Task 51 is the first divergence: LL bound fails (`U = 1.020 > 1.0`), processor
+demand still passes (staggered deadlines leave sufficient slack).
+
+### Serial output — tasks 48–100 + summary
+
+![Admission test part 2](images/admissiontest2.png)
+
+Summary line confirms: LL accepted 50/100 tasks, PD accepted 51/100 — exactly
+1 extra task admitted by processor demand analysis.
 
 ---
 
