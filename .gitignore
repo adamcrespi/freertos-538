@@ -39,6 +39,11 @@
 *.d
 !README.md
 !higher_level.md
+!bugs_MP.md
+!changes_MP.md
+!design_MP.md
+!future_MP.md
+!testing_MP.md
 !capture_gantt.py
 !capture_gantt_edf.py
 !capture_gantt_mp.py
