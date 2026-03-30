@@ -1,107 +1,163 @@
-# FreeRTOS Real-Time Scheduling Extensions — CPSC 538
-# Adam Crespi and Jordan Werstiuk
+# FreeRTOS Multiprocessor EDF — CPSC 538
+**Adam Crespi & Jordan Werstiuk** | Branch: `multiprocessor`
 
+Extends the FreeRTOS SMP kernel on the RP2040 dual-core Cortex-M0+ to support
+both **Global EDF** and **Partitioned EDF** scheduling, with admission control
+and AD2 logic-analyzer verification.
 
-Extensions to the FreeRTOS kernel to support dynamic-priority scheduling and resource access control, running on a Raspberry Pi Pico (RP2040).
+For a full explanation of all four project tasks (EDF, SRP, CBS, MP) see
+[`higher_level.md`](higher_level.md).
 
-## Project Overview
-
-This project extends FreeRTOS with four real-time scheduling mechanisms:
-
-| Task | Description |
-|------|-------------|
-| **EDF** | Earliest Deadline First scheduling with admission control | 
-| **SRP** | Stack Resource Policy for binary semaphores with runtime stack sharing |
-| **CBS** | Constant Bandwidth Server for aperiodic soft real-time tasks |
-| **MP** | Multiprocessor real-time scheduling |
-
-Each extension is developed on its own branch and includes configuration flags to enable/disable the feature, falling back to stock FreeRTOS behavior when disabled.
+---
 
 ## Hardware
 
-- Raspberry Pi Pico (RP2040, dual-core Cortex-M0+ @ 133 MHz)
-- Raspberry Pi Debug Probe (SWD + UART)
-- Analog Discovery 2 (logic analyzer for schedule capture)
-- 3x LEDs (Red, Yellow, Green) on GP16, GP17, GP18
+| Component | Detail |
+|-----------|--------|
+| Raspberry Pi Pico | RP2040, dual-core Cortex-M0+ @ 133 MHz |
+| Raspberry Pi Debug Probe | SWD + UART serial |
+| Analog Discovery 2 | Logic analyzer for schedule capture |
+| LEDs | Red (GP16), Yellow (GP17), Green (GP18) |
 
-## Repository Structure
+AD2 wiring: GP16 → DIO0, GP17 → DIO1, GP18 → DIO2, GND → GND.
 
-```
-├── FreeRTOS/
-│   └── FreeRTOS/
-│       ├── Source/                  ← Kernel source (modified for EDF/SRP/CBS/MP)
-│       │   ├── tasks.c             ← Scheduler
-│       │   ├── queue.c             ← Semaphore implementation
-│       │   └── include/
-│       │       ├── task.h          ← TCB definition, task API
-│       │       └── semphr.h        ← Semaphore API
-│       └── Demo/ThirdParty/Community-Supported-Demos/
-│           └── CORTEX_M0+_RP2040/
-│               ├── LedTest/        ← Test programs
-│               └── CMakeLists.txt
-├── capture_gantt.py                ← AD2 logic analyzer capture + Gantt chart tool
-├── changes_EDF.md                  ← Change log per task
-├── design_EDF.md                   ← Design documentation per task
-├── testing_EDF.md                  ← Test cases and results per task
-├── bugs_EDF.md                     ← Known bugs per task
-└── future_EDF.md                   ← Future improvements per task
-```
+---
 
-## Branches
+## Scheduling Modes
 
-- `main` — Clean FreeRTOS baseline + tooling
-- `edf` — EDF scheduler + admission control
-- `srp` — SRP (branched from edf)
-- `cbs` — CBS (branched from edf)
-- `multiprocessor` — MP support
+| Mode | Flag | Admission control | Task migration |
+|------|------|-------------------|----------------|
+| Global EDF | `GLOBAL_EDF_ENABLE 1` | Σ Ci/Ti ≤ 2.0 | Yes — tasks run on any core |
+| Partitioned EDF | `PARTITIONED_EDF_ENABLE 1` | Per-core Σ Ci/Ti ≤ 1.0 | No — tasks pinned at creation |
 
-## Build Instructions
+If neither flag is set, **Global EDF is the default**.
 
-### Build
+---
+
+## Build & Flash
+
+Both test binaries share one compiled `FreeRTOS-Kernel`, so only one mode can
+be active per build.  Set the flags in `FreeRTOSConfig.h` before each build.
 
 ```bash
-cd FreeRTOS/FreeRTOS/Demo/ThirdParty/Community-Supported-Demos/CORTEX_M0+_RP2040
-make led_test -j$(nproc)
+cd ~/rtos-project/FreeRTOS/FreeRTOS/Demo/ThirdParty/Community-Supported-Demos/CORTEX_M0+_RP2040/build
+cmake -DPICO_SDK_PATH=~/rtos-project/pico-sdk ..
+
+# --- Global EDF ---
+# Set GLOBAL_EDF_ENABLE=1 / PARTITIONED_EDF_ENABLE=0 in FreeRTOSConfig.h, then:
+make mp_global_test -j$(nproc)
+picotool load LedTest/mp_global_test.uf2
+
+# --- Partitioned EDF ---
+# Set GLOBAL_EDF_ENABLE=0 / PARTITIONED_EDF_ENABLE=1 in FreeRTOSConfig.h, then:
+make mp_partitioned_test -j$(nproc)
+picotool load LedTest/mp_partitioned_test.uf2
 ```
 
-### Flash
-1. Hold BOOTSEL on Pico, plug in USB, release
-2. `cp LedTest/led_test.uf2 /media/$USER/RPI-RP2/`
-
-### Serial Monitor
+Serial monitor:
 ```bash
 minicom -b 115200 -D /dev/ttyACM0
 ```
 
-## Schedule Capture Tool
-The `capture_gantt.py` script uses an Analog Discovery 2 to capture task execution via GPIO signals and generates a Gantt chart.
+---
 
-<img width="1400" height="363" alt="test1" src="https://github.com/user-attachments/assets/394a7082-fab3-463d-9c68-edc065d158f1" />
+## Task Sets
 
+### Global EDF (`mp_global_test`) — implicit deadline, D=T
 
-### Usage
+| Task | GPIO | C (ms) | T (ms) | U |
+|------|------|--------|--------|---|
+| τ1 | GP16 | 300 | 500 | 0.600 |
+| τ2 | GP17 | 350 | 700 | 0.500 |
+| τ3 | GP18 | 360 | 900 | 0.400 |
+| **Total** | | | | **1.500 ≤ 2.0** |
+
+### Partitioned EDF (`mp_partitioned_test`) — implicit deadline, D=T
+
+| Task | GPIO | Core | C (ms) | T (ms) | U |
+|------|------|------|--------|--------|---|
+| τ1 | GP16 | 0 | 250 | 500 | 0.500 |
+| τ2 | GP17 | 0 | 280 | 700 | 0.400 |
+| τ3 | GP18 | 1 | 360 | 900 | 0.400 |
+| **Core 0** | | | | | **0.900 ≤ 1.0** |
+| **Core 1** | | | | | **0.400 ≤ 1.0** |
+
+---
+
+## Gantt Chart Capture
 
 ```bash
-python3 capture_gantt.py
+# Global EDF
+python3 capture_gantt_mp.py --mode global --output global_schedule.png
+
+# Partitioned EDF
+python3 capture_gantt_mp.py --mode partitioned --output partitioned_schedule.png
+
+# Save raw data for offline replay
+python3 capture_gantt_mp.py --mode global --save-csv global.csv
+python3 capture_gantt_mp.py --mode global --from-csv global.csv
 ```
 
-### Wiring
+**SMP proof:** any time window where two channels are simultaneously HIGH means
+two EDF tasks are executing in parallel on different cores.  The script shades
+these windows purple and prints:
+```
+*** PROOF: both cores executed EDF tasks simultaneously ***
+```
 
-| AD2 Channel | Pico GPIO | Task |
-|-------------|-----------|------|
-| D0 | GP16 | τ1 |
-| D1 | GP17 | τ2 |
-| D2 | GP18 | τ3 |
-| GND | GND | Shared |
+---
 
-## Configuration
-
-In `FreeRTOSConfig.h`:
+## Configuration Reference
 
 ```c
-#define configUSE_EDF_SCHEDULER    1  // 0 = default FreeRTOS, 1 = EDF
-#define configUSE_SRP              1  // 0 = no SRP, 1 = SRP (requires EDF)
-#define configUSE_CBS              1  // 0 = no CBS, 1 = CBS (requires EDF)
+/* FreeRTOSConfig.h — multiprocessor mode (pick exactly one) */
+#define GLOBAL_EDF_ENABLE      1   /* global EDF, tasks migrate freely */
+#define PARTITIONED_EDF_ENABLE 0   /* partitioned EDF, tasks pinned */
+
+/* Required for SMP */
+#define configNUMBER_OF_CORES               2
+#define configRUN_MULTIPLE_PRIORITIES       1
+#define configUSE_CORE_AFFINITY             1
+#define configTASK_DEFAULT_CORE_AFFINITY    0x3
+#define portSUPPORT_SMP                     1
 ```
 
-Setting all flags to 0 gives stock FreeRTOS behavior.
+---
+
+## Documentation
+
+| File | Contents |
+|------|----------|
+| [`higher_level.md`](higher_level.md) | Top-down explanation of all 4 tasks (EDF, SRP, CBS, MP) |
+| [`design_MP.md`](design_MP.md) | Architecture, algorithm design, assignment questions answered |
+| [`changes_MP.md`](changes_MP.md) | All kernel changes and new files |
+| [`testing_MP.md`](testing_MP.md) | Test cases, expected serial output, Gantt instructions |
+| [`bugs_MP.md`](bugs_MP.md) | Known bugs and fixes (B1–B7) |
+| [`future_MP.md`](future_MP.md) | Future improvements (F1–F7) |
+
+---
+
+## Repository Structure
+
+```
+├── FreeRTOS/FreeRTOS/
+│   ├── Source/
+│   │   ├── tasks.c              ← EDF + CBS + SRP + SMP scheduler
+│   │   ├── queue.c              ← SRP semaphore take/give
+│   │   └── include/
+│   │       ├── task.h           ← xTaskCreateEDF, xTaskCreateCBS prototypes
+│   │       └── semphr.h         ← SRP semaphore API
+│   └── Demo/.../CORTEX_M0+_RP2040/
+│       └── LedTest/
+│           ├── FreeRTOSConfig.h
+│           ├── main_mp_global.c
+│           ├── main_mp_partitioned.c
+│           └── capture_gantt_mp.py
+├── capture_gantt_mp.py          ← (also at root for convenience)
+├── higher_level.md
+├── design_MP.md
+├── changes_MP.md
+├── testing_MP.md
+├── bugs_MP.md
+└── future_MP.md
+```
