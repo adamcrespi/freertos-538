@@ -150,6 +150,71 @@ after the scheduler starts.  Only tasks assigned to core 0 ever execute.
 
 ---
 
+## B8: Partitioned EDF — tasks migrate to wrong core when multiple tasks are pinned to the same core
+
+**Status:** Known / open
+
+**Description:**
+In partitioned EDF mode, tasks pinned to the same core (e.g., τ1 and τ2 both
+assigned to core 0 via `uxCoreAffinityMask = 0x1`) intermittently execute on
+the wrong core.  Serial output confirms the migration:
+```
+[T1] *** MIGRATION DETECTED: job 267 on core 1 (expected 0)! ***
+```
+The migration begins after several hundred jobs and increases in frequency over
+time.  Admission control, task creation, and initial scheduling all appear
+correct; the violation starts mid-run.
+
+**Root cause:**
+The stock FreeRTOS SMP kernel contains an affinity optimisation in
+`prvSelectHighestPriorityTask` (`tasks.c`, around the `pxPreviousTCB` block):
+
+```c
+/* Strip cores where the new task can run from the evicted task's search map. */
+uxCoreMap &= ~( pxCurrentTCBs[ xCoreID ]->uxCoreAffinityMask );
+```
+
+When task τ2 (mask `0x1`) preempts task τ1 (mask `0x1`) on core 0, this
+optimisation computes:
+```
+uxCoreMap = τ1->mask = 0x1
+uxCoreMap &= ~(τ2->mask) = ~0x1 = 0xFE
+uxCoreMap &= ((1<<2)-1) = 0xFE & 0x3 = 0x2   ← core 1 only
+```
+The optimisation concludes "search core 1 for τ1" and issues a spurious
+`prvYieldCore(1)`.  The affinity guard inside `prvSelectHighestPriorityTask`
+(`uxCoreAffinityMask & (1 << xCoreID)`) *should* then prevent core 1 from
+actually scheduling τ1, but under SMP race conditions between the two cores'
+context-switch paths this protection fails intermittently, resulting in τ1
+running on core 1.
+
+**Why the optimisation is wrong here:**
+The optimisation was designed for tasks with flexible affinity masks (e.g.,
+`0x3`), where evicting task B from core 0 with task A means B can legitimately
+migrate to core 1.  It does not handle the case where both tasks share an
+identical single-core mask — there is no alternative core to migrate to, but
+the optimisation strips the only valid core from the search map.
+
+**Impact:**
+- Tasks execute on the wrong core, violating the partitioned EDF invariant.
+- GPIO trace hooks toggle on the wrong core, producing incorrect Gantt charts.
+- Migration frequency grows over time as scheduling events accumulate.
+- τ1 and τ2 deadline miss counts are inflated by the spurious context switches.
+
+**Workaround / mitigation:**
+Assign at most one EDF task per core to avoid the triggering condition entirely.
+With one task per core, no two tasks share the same affinity mask, so the
+optimisation's result always points to a valid alternative core (or zero cores,
+in which case no spurious yield is sent).
+
+A kernel-level fix would require either:
+(a) Skipping the optimisation when `uxCoreMap` becomes 0 after the mask
+    operation (i.e., the evicted task has nowhere else to go), or
+(b) Replacing the optimisation with a full per-core affinity scan that respects
+    single-core pinning.
+
+---
+
 ## B7: Global and partitioned builds share one `FreeRTOSConfig.h`
 
 **Status:** By design / workflow requirement

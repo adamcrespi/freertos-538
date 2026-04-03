@@ -22,8 +22,8 @@
  *
  * Default: Global EDF.
  */
-#define GLOBAL_EDF_ENABLE               0
-#define PARTITIONED_EDF_ENABLE          1
+#define GLOBAL_EDF_ENABLE               1
+#define PARTITIONED_EDF_ENABLE          0
 
 /* ── GPIO trace hooks for AD2 logic analyzer ─────────────────── */
 extern void vTracePinHigh(void);

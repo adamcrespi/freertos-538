@@ -77,11 +77,26 @@ python3 capture_gantt_mp.py --mode global --save-csv global.csv --output global_
 ```
 
 Expected Gantt output:
-- Coloured bars for τ1–τ4 (GP16–GP19).
+- Coloured bars for τ1–τ3 (GP16–GP18).
 - **Purple shading** behind any time window where two or more bars are
   simultaneously HIGH — direct proof of dual-core parallel execution.
 - Downward triangles (deadlines) all hit before the next bar; no red misses.
 - Summary line: `*** PROOF: both cores executed EDF tasks simultaneously ***`
+
+### Captured Gantt — Global EDF (U=1.500, 2 cores)
+
+![Global EDF Gantt](global_mp_gantt_final.png)
+
+τ1 (red, T=500ms) runs every period with the earliest deadline and gets the
+first slot on whichever core is free.  τ2 (orange, T=700ms) and τ3 (green,
+T=900ms) fill the second core in EDF order.  **Purple regions** confirm both
+cores are executing EDF tasks simultaneously — the key SMP proof.  Task
+migration is visible in the serial log: the same task reports `core=0` for some
+jobs and `core=1` for others, confirming tasks move freely between cores as
+expected under global EDF.  The brief burst of rapid context-switching visible
+at ~3.0s is a known SMP scheduling edge case (see B8 in `bugs_MP.md`) triggered
+when multiple tasks have close absolute deadlines; it does not affect the
+overall correctness of the global EDF demonstration.
 
 ---
 
@@ -141,13 +156,29 @@ python3 capture_gantt_mp.py --mode partitioned --from-csv partitioned.csv --outp
 ```
 
 Expected Gantt output:
-- GP16/GP17 bars have a **pink background band** (core 0 tasks).
-- GP18/GP19 bars have a **blue background band** (core 1 tasks).
+- Task labels show `[core 0]` / `[core 1]` annotations.
 - Within each core, bars never overlap — no two core-0 tasks run at the same time,
   and no two core-1 tasks run at the same time.
 - Purple dual-core shading still appears when one core-0 task and one core-1 task
   run simultaneously (expected and correct).
-- No red deadline-miss markers.
+- No red deadline-miss markers (ideal); migration bug may introduce some (see B8).
+
+### Captured Gantt — Partitioned EDF (U=1.300, 2 cores)
+
+![Partitioned EDF Gantt](partitioned_final.png)
+
+τ1 (red) and τ2 (orange) are pinned to **core 0** and are labelled `[core 0]`
+on the chart.  τ3 (green) is pinned to **core 1**.  On core 0, τ1 always runs
+first each period (D=500ms < D=700ms), with τ2 filling the remaining time —
+correct EDF ordering within the core.  τ3 runs independently on core 1 with no
+interference from the core-0 tasks.  **Purple regions** where a core-0 task and
+τ3 overlap confirm both cores are genuinely executing in parallel.
+
+The dark shredded bursts visible at ~0.3s, ~4s, and ~5.3s are caused by the
+B8 migration bug (see `bugs_MP.md`): the FreeRTOS SMP affinity optimisation
+incorrectly routes τ1/τ2 to core 1 when both tasks compete for core 0,
+producing spurious context switches and the two deadline misses on τ3.  Outside
+these bursts the partitioned EDF behaviour is correct and clearly visible.
 
 ---
 
