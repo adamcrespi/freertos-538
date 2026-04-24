@@ -84,3 +84,33 @@ target_link_libraries(cbs_mixed_test
 pico_enable_stdio_uart(cbs_mixed_test 1)
 pico_enable_stdio_usb(cbs_mixed_test 0)
 pico_add_extra_outputs(cbs_mixed_test)
+
+add_executable(cbs_mixed2_test
+    main_cbs_mixed_2.c
+)
+target_include_directories(cbs_mixed2_test PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}
+)
+target_link_libraries(cbs_mixed2_test
+    pico_stdlib
+    FreeRTOS-Kernel
+    FreeRTOS-Kernel-Heap4
+)
+pico_enable_stdio_uart(cbs_mixed2_test 1)
+pico_enable_stdio_usb(cbs_mixed2_test 0)
+pico_add_extra_outputs(cbs_mixed2_test)
+
+add_executable(cbs_mixed3_test
+    main_cbs_mixed_3.c
+)
+target_include_directories(cbs_mixed3_test PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}
+)
+target_link_libraries(cbs_mixed3_test
+    pico_stdlib
+    FreeRTOS-Kernel
+    FreeRTOS-Kernel-Heap4
+)
+pico_enable_stdio_uart(cbs_mixed3_test 1)
+pico_enable_stdio_usb(cbs_mixed3_test 0)
+pico_add_extra_outputs(cbs_mixed3_test)
